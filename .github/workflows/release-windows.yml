@@ -1,0 +1,172 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Windows installer
+    runs-on: windows-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            platform/tauri/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,desktop,packaging]"
+
+      - name: Install web dependencies
+        shell: pwsh
+        working-directory: web
+        run: npm ci
+
+      - name: Install Tauri dependencies
+        shell: pwsh
+        working-directory: platform/tauri
+        run: npm ci
+
+      - name: Pre-release checks
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/test_web_api.py tests/test_desktop_backend.py
+
+      - name: Web pre-release checks
+        shell: pwsh
+        working-directory: web
+        run: |
+          npm run test -- --run App.test.tsx
+          npm exec -- tsc --noEmit
+
+      - name: Rust pre-release checks
+        shell: pwsh
+        working-directory: platform/tauri/src-tauri
+        run: cargo check --locked
+
+      - name: Build Windows installer
+        id: build_installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $result = .\scripts\build-desktop.ps1 -TargetTriple x86_64-pc-windows-msvc | Select-Object -Last 1
+          if (-not $result -or -not $result.Path) {
+            throw "Build script did not return an installer artifact."
+          }
+          if (-not (Test-Path -LiteralPath $result.Path)) {
+            throw "Installer artifact does not exist: $($result.Path)"
+          }
+
+          $artifactDir = Join-Path $PWD "build\github-release"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $installer = Get-Item -LiteralPath $result.Path
+          $installerOut = Join-Path $artifactDir $installer.Name
+          Copy-Item -LiteralPath $installer.FullName -Destination $installerOut -Force
+
+          $installerHash = if ($result.SHA256) {
+            $result.SHA256
+          } else {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $installerOut).Hash
+          }
+
+          $sidecarHash = if ($result.SidecarSHA256) {
+            $result.SidecarSHA256
+          } else {
+            ""
+          }
+
+          $shaFile = Join-Path $artifactDir "SHA256SUMS.txt"
+          $shaLines = @(
+            "$installerHash  $($installer.Name)"
+          )
+          if ($sidecarHash) {
+            $shaLines += "$sidecarHash  qq-mail-agent-worker.exe"
+          }
+          Set-Content -LiteralPath $shaFile -Encoding utf8 -Value $shaLines
+
+          $metadataFile = Join-Path $artifactDir "build-metadata.json"
+          [pscustomobject]@{
+            installer = $installer.Name
+            installer_sha256 = $installerHash
+            installer_bytes = $installer.Length
+            sidecar_sha256 = $sidecarHash
+            target_triple = $result.TargetTriple
+            cargo_target_dir = $result.CargoTargetDir
+            source_sha = "${{ github.sha }}"
+            ref_name = "${{ github.ref_name }}"
+            built_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $metadataFile -Encoding utf8
+
+          "installer_path=$installerOut" >> $env:GITHUB_OUTPUT
+          "sha256_path=$shaFile" >> $env:GITHUB_OUTPUT
+          "metadata_path=$metadataFile" >> $env:GITHUB_OUTPUT
+          "installer_name=$($installer.Name)" >> $env:GITHUB_OUTPUT
+          "installer_sha256=$installerHash" >> $env:GITHUB_OUTPUT
+
+          "### Windows installer" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- File: ``$($installer.Name)``" >> $env:GITHUB_STEP_SUMMARY
+          "- SHA-256: ``$installerHash``" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: miaogent-windows-installer
+          if-no-files-found: error
+          path: build/github-release/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: build/github-release/*
+          body: |
+            Windows installer for MiaoGent.
+
+            SHA-256:
+
+            ```text
+            ${{ steps.build_installer.outputs.installer_sha256 }}  ${{ steps.build_installer.outputs.installer_name }}
+            ```
+
+            Note: this build is not Authenticode-signed yet, so Windows SmartScreen may show a warning.
