@@ -1,0 +1,49 @@
+[project]
+name = "qq-mail-agent-cli"
+version = "0.1.0"
+description = "A safe-first QQ Mail AI agent CLI learning project."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+agent = [
+    "langgraph>=1.0.0",
+    "langchain>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "langsmith>=0.4.0",
+    "python-dotenv>=1.0.0",
+]
+web = [
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "uvicorn[standard]>=0.30.0",
+]
+desktop = [
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "imapclient>=3.0.0",
+    "uvicorn[standard]>=0.30.0",
+]
+packaging = [
+    "pyinstaller>=6.0.0",
+]
+
+[project.scripts]
+qq-mail-agent = "qq_mail_agent_cli.main:main"
+wx_email = "qq_mail_agent_cli.interactive:main"
+wx_email_web = "qq_mail_agent_cli.web_server:main"
+qq-mail-agent-desktop = "qq_mail_agent_cli.desktop_worker:main"
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

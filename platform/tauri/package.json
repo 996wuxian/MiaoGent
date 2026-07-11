@@ -1,0 +1,13 @@
+{
+  "name": "qq-mail-agent-tauri",
+  "version": "0.1.11",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build-desktop.ps1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}
