@@ -37,7 +37,7 @@ if ([System.IO.Path]::IsPathRooted($frontendDist)) {
 $resolvedFrontendDist = [System.IO.Path]::GetFullPath(
     (Join-Path (Join-Path $root "platform\tauri\src-tauri") $frontendDist)
 )
-$expectedWebDist = [System.IO.Path]::GetFullPath((Join-Path $root "web\dist"))
+$expectedWebDist = [System.IO.Path]::GetFullPath((Join-Path $root "platform\tauri\web\dist"))
 if ($resolvedFrontendDist -ne $expectedWebDist) {
     throw "Tauri frontendDist must resolve to $expectedWebDist, got $resolvedFrontendDist."
 }

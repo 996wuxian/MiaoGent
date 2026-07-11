@@ -1,7 +1,7 @@
 # Windows Tauri platform
 
-This directory contains the Windows desktop shell only. It reuses the React
-frontend from `../../web` and the Python mail-agent core from `../../src`.
+This directory contains the Windows desktop distribution. It bundles the React
+renderer from `web/` and the Python mail-agent core from `../../src`.
 
 ## Runtime lifecycle
 

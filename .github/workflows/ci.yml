@@ -37,7 +37,7 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: |
-            web/package-lock.json
+            platform/tauri/web/package-lock.json
             platform/tauri/package-lock.json
 
       - name: Set up Rust
@@ -55,7 +55,7 @@ jobs:
 
       - name: Install web dependencies
         shell: pwsh
-        working-directory: web
+        working-directory: platform/tauri/web
         run: npm ci
 
       - name: Install Tauri dependencies
@@ -73,7 +73,7 @@ jobs:
 
       - name: Web checks
         shell: pwsh
-        working-directory: web
+        working-directory: platform/tauri/web
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true

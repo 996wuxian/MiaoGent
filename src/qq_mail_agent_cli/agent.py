@@ -15,7 +15,7 @@ from qq_mail_agent_cli.models import (
 class MailAgent:
     """Agent boundary.
 
-    This starts as deterministic mock logic so the CLI can be learned and
+    This starts as deterministic mock logic so the mail workflow can be learned and
     tested without API keys. Replace this with LangGraph after the workflow is
     understood.
     """

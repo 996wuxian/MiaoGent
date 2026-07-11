@@ -1,7 +1,7 @@
 [project]
-name = "qq-mail-agent-cli"
+name = "miaogent"
 version = "0.1.0"
-description = "A safe-first QQ Mail AI agent CLI learning project."
+description = "A local-first QQ Mail AI assistant desktop app."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -17,11 +17,6 @@ agent = [
     "langsmith>=0.4.0",
     "python-dotenv>=1.0.0",
 ]
-web = [
-    "fastapi>=0.115.0",
-    "httpx>=0.28.0",
-    "uvicorn[standard]>=0.30.0",
-]
 desktop = [
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
@@ -33,9 +28,6 @@ packaging = [
 ]
 
 [project.scripts]
-qq-mail-agent = "qq_mail_agent_cli.main:main"
-wx_email = "qq_mail_agent_cli.interactive:main"
-wx_email_web = "qq_mail_agent_cli.web_server:main"
 qq-mail-agent-desktop = "qq_mail_agent_cli.desktop_worker:main"
 
 [build-system]

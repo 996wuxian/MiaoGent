@@ -1,11 +1,10 @@
-# Platform entries
+# Platform entry
 
-This directory keeps platform-specific launch and packaging code separate while
-reusing the same product core:
+MiaoGent now ships as a Tauri desktop app.
 
-- `pc/`: browser-based local workbench entry for the existing `web/` app.
-- `cli/`: terminal entry for the existing Python CLI.
-- `tauri/`: Windows desktop shell, tray lifecycle, autostart and notifications.
+- `tauri/`: Windows desktop shell, tray lifecycle, autostart, notifications,
+  bundled React renderer and Python sidecar packaging.
 
-Shared code remains in `web/` and `src/qq_mail_agent_cli/`. Platform adapters
-must not copy mail, AI, draft or storage business logic.
+Shared product logic remains in `src/qq_mail_agent_cli/`. The React renderer is
+kept under `platform/tauri/web/` because it is no longer distributed as a
+standalone browser platform.

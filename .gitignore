@@ -31,7 +31,8 @@ logs/
 .mail_exports/
 .mail_agent_state/
 node_modules/
-web/dist/
+/web/
+platform/tauri/web/dist/
 platform/tauri/src-tauri/target/
 platform/tauri/src-tauri/binaries/*.exe
 platform/tauri/src-tauri/binaries/*.msi

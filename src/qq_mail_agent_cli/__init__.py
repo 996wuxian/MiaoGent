@@ -1,4 +1,3 @@
-"""QQ Mail Agent CLI package."""
+"""MiaoGent desktop mail-agent package."""
 
 __version__ = "0.1.0"
-

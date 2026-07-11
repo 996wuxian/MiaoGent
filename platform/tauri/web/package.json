@@ -1,6 +1,6 @@
 {
-  "name": "qq-mail-agent-web",
-  "version": "0.1.0",
+  "name": "miaogent-renderer",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "scripts": {

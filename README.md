@@ -1,11 +1,11 @@
 # MiaoGent
 
 <p align="center">
-  <img src="web/src/assets/miaogent-logo.png" width="112" alt="MiaoGent logo" />
+  <img src="platform/tauri/web/src/assets/miaogent-logo.png" width="112" alt="MiaoGent logo" />
 </p>
 
 <p align="center">
-  <strong>Local-first QQ Mail AI Agent for Windows, Web and CLI.</strong>
+  <strong>Local-first QQ Mail AI Agent desktop app for Windows.</strong>
 </p>
 
 <p align="center">
@@ -29,8 +29,7 @@ The core rule is simple: **MiaoGent can help you read, classify and draft, but i
 - **AI priority labels**: general, important, urgent and needs-reply.
 - **Draft generation** for emails that need a response.
 - **Human-in-the-loop sending**: drafts must be reviewed and confirmed manually.
-- **Local Web workbench** with mail list, reader, actions, drafts and activity log.
-- **CLI workflow** for learning, debugging and automation experiments.
+- **Bundled React workbench** with mail list, reader, actions, drafts and activity log.
 - **SQLite local state** for metadata, insights, drafts and operation logs.
 - **Local-only backend** bound to `127.0.0.1`.
 
@@ -64,12 +63,11 @@ QQ Mail IMAP/SMTP
         ▼
  Python Core ── SQLite local state
         │
-        ├── CLI
-        ├── FastAPI local Web API
         └── Tauri Desktop App
                   │
                   ├── Tray / autostart
                   ├── Native notifications
+                  ├── FastAPI loopback sidecar
                   └── React workbench
 ```
 
@@ -78,11 +76,8 @@ QQ Mail IMAP/SMTP
 ```text
 .
 ├── src/qq_mail_agent_cli/      # Python core, mail client, storage, API and desktop worker
-├── web/                        # React + TypeScript workbench
 ├── platform/
-│   ├── cli/                    # CLI platform notes
-│   ├── pc/                     # Web/PC platform notes
-│   └── tauri/                  # Windows desktop app
+│   └── tauri/                  # Windows desktop app and bundled React renderer
 ├── scripts/                    # Desktop/sidecar build scripts
 ├── tests/                      # Python regression tests
 ├── docs/                       # Architecture and learning notes
@@ -114,38 +109,14 @@ DEEPSEEK_API_KEY=
 
 QQ Mail requires a client authorization code instead of your login password.
 
-### 3. Install Python dependencies
+### 3. Install development dependencies
 
 ```powershell
-python -m pip install -e ".[web,desktop,packaging,dev]"
-```
-
-### 4. Run the local Web API
-
-```powershell
-wx_email_web
-```
-
-By default, the API listens on:
-
-```text
-http://127.0.0.1:8000
-```
-
-### 5. Run the React workbench
-
-Open another terminal:
-
-```powershell
-cd web
+python -m pip install -e ".[desktop,packaging,dev]"
+cd platform\tauri\web
 npm install
-npm run dev
-```
-
-Then open:
-
-```text
-http://127.0.0.1:5173
+cd ..
+npm install
 ```
 
 ## Desktop app
@@ -172,22 +143,6 @@ Notes:
 - Build outputs are ignored by Git.
 - The generated Python sidecar executable is not committed.
 
-## CLI usage
-
-```powershell
-python -m qq_mail_agent_cli --help
-python -m qq_mail_agent_cli list --limit 5
-python -m qq_mail_agent_cli triage --limit 5
-python -m qq_mail_agent_cli draft --id mock-1
-python -m qq_mail_agent_cli translate --id mock-1
-```
-
-Interactive menu:
-
-```powershell
-wx_email
-```
-
 ## Development commands
 
 Python tests:
@@ -196,10 +151,10 @@ Python tests:
 python -m pytest -q
 ```
 
-Frontend tests and build:
+Renderer tests and build:
 
 ```powershell
-cd web
+cd platform\tauri\web
 npm run test -- --run
 npm exec -- tsc --noEmit
 npm run build
@@ -243,7 +198,8 @@ Ignored local paths include:
 - `*.sqlite`
 - `*.db`
 - `build/`
-- `web/dist/`
+- `web/`
+- `platform/tauri/web/dist/`
 - `platform/tauri/src-tauri/target/`
 - `platform/tauri/src-tauri/binaries/*.exe`
 
