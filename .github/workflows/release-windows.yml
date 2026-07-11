@@ -50,6 +50,8 @@ jobs:
       - name: Install Python dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,desktop,packaging]"
 
@@ -66,12 +68,16 @@ jobs:
       - name: Pre-release checks
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pytest -q tests/test_web_api.py tests/test_desktop_backend.py
 
       - name: Web pre-release checks
         shell: pwsh
         working-directory: web
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           npm run test -- --run App.test.tsx
           npm exec -- tsc --noEmit
 
@@ -85,6 +91,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
 
           $result = .\scripts\build-desktop.ps1 -TargetTriple x86_64-pc-windows-msvc | Select-Object -Last 1
           if (-not $result -or -not $result.Path) {

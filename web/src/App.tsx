@@ -163,7 +163,46 @@ function pad2(value: number) {
   return String(value).padStart(2, '0');
 }
 
+const mailMonthNumbers: Record<string, string> = {
+  jan: '01',
+  feb: '02',
+  mar: '03',
+  apr: '04',
+  may: '05',
+  jun: '06',
+  jul: '07',
+  aug: '08',
+  sep: '09',
+  oct: '10',
+  nov: '11',
+  dec: '12',
+};
+
+function parseMailHeaderDateParts(value: string | null | undefined) {
+  if (!value) return null;
+  const match = value.match(/(?:^|,\s*)(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2}):(\d{2})(?::\d{2})?\s+(?:[+-]\d{4}|[A-Z]{1,5})\b/);
+  if (!match) return null;
+  const [, day, monthName, year, hour, minute] = match;
+  const month = mailMonthNumbers[monthName.toLowerCase()];
+  if (!month) return null;
+  return {
+    year,
+    month,
+    day: pad2(Number(day)),
+    time: `${hour}:${minute}`,
+  };
+}
+
 function formatMailDate(value: string | null | undefined, mode: 'list' | 'detail' = 'list') {
+  const headerDate = parseMailHeaderDateParts(value);
+  if (headerDate) {
+    const full = `${headerDate.year}-${headerDate.month}-${headerDate.day} ${headerDate.time}`;
+    if (mode === 'detail') return full;
+    return Number(headerDate.year) === new Date().getFullYear()
+      ? `${headerDate.month}-${headerDate.day} ${headerDate.time}`
+      : full;
+  }
+
   const parsed = parseMailDate(value);
   if (!parsed) return value || '';
   const year = parsed.getFullYear();
