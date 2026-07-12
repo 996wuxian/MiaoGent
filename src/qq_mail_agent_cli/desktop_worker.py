@@ -23,7 +23,7 @@ from qq_mail_agent_cli.web_server import create_app
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="qq-mail-agent-desktop")
+    parser = argparse.ArgumentParser(prog="miaogent-worker")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--data-dir", type=Path, required=True)

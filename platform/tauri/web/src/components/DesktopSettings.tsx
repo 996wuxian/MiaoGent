@@ -4,6 +4,7 @@ import {
   checkDesktopUpdate,
   clearDesktopUserData,
   desktopConfigChecks,
+  getDesktopAppVersion,
   getDesktopStorageLocations,
   getAutostartStatus,
   getDesktopConfig,
@@ -119,6 +120,7 @@ export function DesktopSettings({
   const [config, setConfig] = useState<DesktopConfigView | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [autostart, setAutostart] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -141,12 +143,13 @@ export function DesktopSettings({
     let disposed = false;
     setLoading(true);
     setError('');
-    void Promise.all([getDesktopConfig(), getAutostartStatus(), getDesktopStorageLocations()])
-      .then(([nextConfig, startup, locations]) => {
+    void Promise.all([getDesktopConfig(), getAutostartStatus(), getDesktopStorageLocations(), getDesktopAppVersion()])
+      .then(([nextConfig, startup, locations, version]) => {
         if (disposed) return;
         setConfig(nextConfig);
         setForm(formFromConfig(nextConfig));
         setAutostart(startup.enabled);
+        setAppVersion(version);
         setStorageLocations(locations);
         setDataRootDraft(locations.dataDirectoryRoot ?? '');
         setWebviewRootDraft(locations.webviewDataDirectoryRoot ?? '');
@@ -551,7 +554,7 @@ export function DesktopSettings({
                   <h3>应用更新</h3>
                   <p>从 GitHub Release 检查新版本；发现更新后会先确认，再下载安装并重启。</p>
                 </div>
-                <Badge tone="info">手动检查</Badge>
+                <Badge tone="info">{appVersion ? `当前版本 v${appVersion}` : '当前版本读取中'}</Badge>
               </div>
               <div className="settings-inline-actions">
                 <button

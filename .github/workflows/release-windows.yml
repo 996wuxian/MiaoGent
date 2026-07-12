@@ -153,7 +153,7 @@ jobs:
             "$latestHash  latest.json"
           )
           if ($sidecarHash) {
-            $shaLines += "$sidecarHash  qq-mail-agent-worker.exe"
+            $shaLines += "$sidecarHash  miaogent-worker.exe"
           }
           Set-Content -LiteralPath $shaFile -Encoding utf8 -Value $shaLines
 

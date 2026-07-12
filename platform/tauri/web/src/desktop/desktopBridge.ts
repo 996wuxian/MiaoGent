@@ -191,6 +191,10 @@ export function openStorageDirectory(path: string) {
   return invokeDesktop<void>('open_storage_directory', { path });
 }
 
+export function getDesktopAppVersion() {
+  return invokeDesktop<string>('desktop_app_version');
+}
+
 export function openDesktopReleasePage() {
   return invokeDesktop<void>('open_release_page');
 }

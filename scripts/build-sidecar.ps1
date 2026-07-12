@@ -26,7 +26,7 @@ $buildId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 $distDir = Join-Path $root "build\sidecar-dist\$buildId"
 $workDir = Join-Path $root "build\sidecar-work\$buildId"
 $binaryDir = Join-Path $root "platform\tauri\src-tauri\binaries"
-$destination = Join-Path $binaryDir "qq-mail-agent-worker-$TargetTriple.exe"
+$destination = Join-Path $binaryDir "miaogent-worker-$TargetTriple.exe"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller sidecar build failed with exit code $LASTEXITCODE."
 }
 
-$built = Join-Path $distDir "qq-mail-agent-worker.exe"
+$built = Join-Path $distDir "miaogent-worker.exe"
 if (-not (Test-Path -LiteralPath $built)) {
     throw "PyInstaller did not produce $built."
 }

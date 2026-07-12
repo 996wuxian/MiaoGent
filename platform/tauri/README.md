@@ -31,7 +31,7 @@ The installer bundles:
 
 - the Tauri desktop executable;
 - the React frontend assets;
-- the PyInstaller sidecar `qq-mail-agent-worker.exe`.
+- the PyInstaller sidecar `miaogent-worker.exe`.
 - signed updater metadata for application-driven upgrades after the first
   updater-capable install.
 
@@ -111,7 +111,7 @@ npm run build
 ```
 
 Production uses `src-tauri/tauri.bundle.conf.json` to add the generated
-`qq-mail-agent-worker-<target-triple>.exe` as `externalBin`. Keeping this in a
+`miaogent-worker-<target-triple>.exe` as `externalBin`. Keeping this in a
 build-only config allows ordinary `cargo check/test/clippy` to run before the
 PyInstaller artifact exists.
 

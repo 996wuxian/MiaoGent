@@ -478,7 +478,7 @@ describe('MiaoGent workbench', () => {
     });
 
     expect(await screen.findByText('桌面 Agent 配置未完成')).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: '新邮件已整理' })).not.toBeInTheDocument();
+    expect(document.querySelector('.startup-summary-drawer')).not.toBeInTheDocument();
   });
 
   it('桌面配置完成时收到启动汇总事件也不自动弹窗', async () => {
@@ -527,7 +527,7 @@ describe('MiaoGent workbench', () => {
       },
     });
 
-    expect(screen.queryByRole('dialog', { name: '新邮件已整理' })).not.toBeInTheDocument();
+    expect(document.querySelector('.startup-summary-drawer')).not.toBeInTheDocument();
   });
 
   it('最近邮件列表触底后自动加载下一页并追加', async () => {

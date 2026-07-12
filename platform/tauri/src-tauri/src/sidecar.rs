@@ -223,7 +223,7 @@ fn build_command<R: Runtime>(
             .current_dir(root)
     } else {
         app.shell()
-            .sidecar("qq-mail-agent-worker")
+            .sidecar("miaogent-worker")
             .map_err(|error| format!("无法定位桌面 sidecar：{error}"))?
     };
 

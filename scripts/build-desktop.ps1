@@ -133,9 +133,9 @@ $installer = Get-ChildItem -LiteralPath $bundleRoot -Filter "*.exe" -File |
 if (-not $installer) {
     throw "Tauri did not produce an NSIS installer under $bundleRoot."
 }
-$releaseSidecar = Join-Path $releaseRoot "qq-mail-agent-worker.exe"
+$releaseSidecar = Join-Path $releaseRoot "miaogent-worker.exe"
 if (-not (Test-Path -LiteralPath $releaseSidecar)) {
-    throw "Tauri release staging does not contain qq-mail-agent-worker.exe."
+    throw "Tauri release staging does not contain miaogent-worker.exe."
 }
 $releaseSidecarHash = Get-FileHash -Algorithm SHA256 -LiteralPath $releaseSidecar
 if ($releaseSidecarHash.Hash -ne $sidecarArtifact.SHA256) {
@@ -143,8 +143,8 @@ if ($releaseSidecarHash.Hash -ne $sidecarArtifact.SHA256) {
 }
 $nsisScript = Get-ChildItem -LiteralPath (Join-Path $releaseRoot "nsis") -Filter "installer.nsi" -File -Recurse |
     Select-Object -First 1
-if (-not $nsisScript -or -not (Select-String -LiteralPath $nsisScript.FullName -SimpleMatch 'oname=qq-mail-agent-worker.exe' -Quiet)) {
-    throw "NSIS input does not include qq-mail-agent-worker.exe."
+if (-not $nsisScript -or -not (Select-String -LiteralPath $nsisScript.FullName -SimpleMatch 'oname=miaogent-worker.exe' -Quiet)) {
+    throw "NSIS input does not include miaogent-worker.exe."
 }
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName
 $signaturePath = "$($installer.FullName).sig"

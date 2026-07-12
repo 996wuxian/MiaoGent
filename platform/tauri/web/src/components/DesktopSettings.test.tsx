@@ -12,6 +12,7 @@ const desktopMocks = vi.hoisted(() => ({
   getDesktopConfig: vi.fn(),
   saveDesktopConfig: vi.fn(),
   clearDesktopUserData: vi.fn(),
+  getDesktopAppVersion: vi.fn(),
   checkDesktopUpdate: vi.fn(),
   installDesktopUpdate: vi.fn(),
   getDesktopStorageLocations: vi.fn(),
@@ -107,6 +108,7 @@ describe('DesktopSettings', () => {
       failedPaths: [],
       clearedCredentials: true,
     });
+    desktopMocks.getDesktopAppVersion.mockReset().mockResolvedValue('0.1.20');
   });
 
   it('saves new secrets without ever reading existing secret values back', async () => {
@@ -231,6 +233,7 @@ describe('DesktopSettings', () => {
     const user = userEvent.setup();
     render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
 
+    expect(await screen.findByText('当前版本 v0.1.20')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: '检查更新' }));
 
     await waitFor(() => expect(desktopMocks.checkDesktopUpdate).toHaveBeenCalledTimes(1));

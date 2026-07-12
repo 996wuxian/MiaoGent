@@ -172,6 +172,11 @@ fn open_storage_directory(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn desktop_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
 fn open_release_page() -> Result<(), String> {
     open::that(RELEASE_PAGE_URL).map_err(|error| format!("无法打开下载页面：{error}"))
 }
@@ -365,6 +370,7 @@ pub fn run() {
             set_webview_data_directory,
             reset_webview_data_directory,
             open_storage_directory,
+            desktop_app_version,
             open_release_page,
             restart_backend,
             prepare_desktop_update,

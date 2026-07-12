@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    qq_mail_agent_desktop_lib::run();
+    miaogent_lib::run();
 }

@@ -5,7 +5,7 @@ import { ConfirmDetail, ConfirmDialog, ConfirmDraft, DevtoolsPasswordDialog, Hea
 import { DesktopSettings } from './components/DesktopSettings';
 import { DraftWorkspace, normalizeUid, type DraftEditorState } from './components/DraftWorkspace';
 import { InspectionReport } from './components/InspectionReport';
-import { InsightSummary, StartupSummaryDrawer } from './components/StartupSummary';
+import { InsightSummary } from './components/StartupSummary';
 import {
   initializeDesktopBridge,
   isTauriRuntime,
@@ -45,7 +45,6 @@ import type {
   QueueStatus,
   SearchMailItem,
   SecretaryInspectionReport,
-  StartupSummary,
   Translation,
   TriageItem,
 } from './types';
@@ -287,8 +286,6 @@ function App() {
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [inspectionError, setInspectionError] = useState('');
   const [mailView, setMailView] = useState<MailView>('all');
-  const [startupSummary, setStartupSummary] = useState<Resource<StartupSummary | null>>(resource(null));
-  const [startupSummaryOpen, setStartupSummaryOpen] = useState(false);
   const [desktopConnected, setDesktopConnected] = useState(false);
   const [desktopConfigIncomplete, setDesktopConfigIncomplete] = useState(desktopRuntime);
   const [desktopTarget, setDesktopTarget] = useState<DesktopTarget | null>(null);
@@ -398,7 +395,6 @@ function App() {
 
   useEffect(() => {
     desktopConfigIncompleteRef.current = desktopConfigIncomplete;
-    if (desktopConfigIncomplete) setStartupSummaryOpen(false);
   }, [desktopConfigIncomplete]);
 
   useEffect(() => {
@@ -425,14 +421,11 @@ function App() {
       onBackendReady: () => {
         if (disposed) return;
         setDesktopConnected(true);
-        void Promise.all([loadLocalHealth(), loadQueue('pending'), loadStartupSummary()]);
+        void Promise.all([loadLocalHealth(), loadQueue('pending')]);
         scheduleDesktopRefresh();
       },
       onEvent: (event) => {
         if (disposed) return;
-        if (event.event === 'startup_summary' || event.event === 'sync_summary') {
-          setStartupSummary({ data: event.payload as unknown as StartupSummary, loading: false, error: '' });
-        }
         if (event.event === 'watcher_status') {
           const status = event.payload.status;
           if (status === 'sidecar_stopped' || status === 'sidecar_ready_timeout' || status === 'sidecar_restart_failed' || status === 'sidecar_restart_exhausted') {
@@ -473,8 +466,8 @@ function App() {
       if (desktopConfigIncompleteRef.current) {
         openDesktopSettings('onboarding');
       } else {
-        setStartupSummaryOpen(true);
-        void loadStartupSummary();
+        switchLeftView('insights');
+        void loadInsights(mailViewRef.current);
       }
     } else {
       mailViewRef.current = 'all';
@@ -804,34 +797,20 @@ function App() {
     void loadInsights(view);
   }
 
-  async function loadStartupSummary() {
-    setStartupSummary((current) => ({ ...current, loading: true, error: '' }));
-    try {
-      const summary = await api.latestStartupSummary();
-      setStartupSummary({ data: summary, loading: false, error: '' });
-    } catch (error) {
-      setStartupSummary((current) => ({ ...current, loading: false, error: errorMessage(error) }));
-    }
-  }
-
-  async function syncDesktopMailbox({ openSummary }: { openSummary: boolean }) {
-    setStartupSummary((current) => ({ ...current, loading: true, error: '' }));
+  async function syncDesktopMailbox() {
     const summary = await api.desktopSync();
-    setStartupSummary({ data: summary, loading: false, error: '' });
-    if (openSummary && !desktopConfigIncompleteRef.current) setStartupSummaryOpen(true);
     return summary;
   }
 
   async function runDesktopSync() {
     await runExclusive('desktop-sync', async () => {
       if (desktopConfigIncompleteRef.current) {
-        setStartupSummaryOpen(false);
         announce('error', '请先完成桌面 Agent 配置，再整理新邮件。');
         openDesktopSettings('onboarding');
         return;
       }
       try {
-        const summary = await syncDesktopMailbox({ openSummary: true });
+        const summary = await syncDesktopMailbox();
         const currentMailView = mailViewRef.current;
         await Promise.all([
           leftViewRef.current === 'insights' ? loadInsights(currentMailView) : loadRecent(0),
@@ -840,7 +819,6 @@ function App() {
         ]);
         announce('success', `整理完成：新增 ${summary.new_count} 封，${summary.reply_count} 封待回复。`);
       } catch (error) {
-        setStartupSummary((current) => ({ ...current, loading: false, error: errorMessage(error) }));
         announce('error', `整理失败：${errorMessage(error)}`);
       }
     });
@@ -1362,9 +1340,8 @@ function App() {
     announce('loading', '正在刷新当前工作台…');
     if (desktopRuntime && desktopConnected) {
       try {
-        await syncDesktopMailbox({ openSummary: false });
+        await syncDesktopMailbox();
       } catch (error) {
-        setStartupSummary((current) => ({ ...current, loading: false, error: errorMessage(error) }));
         announce('error', `刷新前同步失败：${errorMessage(error)}`);
         return;
       }
@@ -1840,18 +1817,6 @@ function App() {
         onClose={() => setInspectionOpen(false)}
         onRerun={() => void runSecretaryInspection()}
         onSelect={openInspectionItem}
-      />
-      <StartupSummaryDrawer
-        open={startupSummaryOpen}
-        summary={startupSummary.data}
-        loading={startupSummary.loading}
-        error={startupSummary.error}
-        onClose={() => setStartupSummaryOpen(false)}
-        onRetry={() => void runDesktopSync()}
-        onSelect={(uid) => {
-          setStartupSummaryOpen(false);
-          void selectMessage(uid, { markSeenOnOpen: false });
-        }}
       />
       <DesktopSettings
         open={desktopSettingsOpen}

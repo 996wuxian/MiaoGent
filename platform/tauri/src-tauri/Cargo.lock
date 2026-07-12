@@ -2232,6 +2232,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "miaogent"
+version = "0.1.20"
+dependencies = [
+ "keyring",
+ "log",
+ "notify-rust",
+ "open",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-log",
+ "tauri-plugin-process",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2945,29 +2968,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "qq-mail-agent-desktop"
-version = "0.1.19"
-dependencies = [
- "keyring",
- "log",
- "notify-rust",
- "open",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-log",
- "tauri-plugin-process",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "ureq",
- "uuid",
 ]
 
 [[package]]

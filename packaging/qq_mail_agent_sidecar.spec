@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="qq-mail-agent-worker",
+    name="miaogent-worker",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

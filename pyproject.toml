@@ -28,7 +28,7 @@ packaging = [
 ]
 
 [project.scripts]
-qq-mail-agent-desktop = "qq_mail_agent_cli.desktop_worker:main"
+miaogent-worker = "qq_mail_agent_cli.desktop_worker:main"
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
