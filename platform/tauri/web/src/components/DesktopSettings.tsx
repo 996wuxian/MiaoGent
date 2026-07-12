@@ -72,6 +72,23 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function updateErrorMessage(error: unknown) {
+  const message = errorMessage(error);
+  const lower = message.toLowerCase();
+  const looksLikeNetworkError = [
+    'error sending request for url',
+    'operation timed out',
+    'connection reset',
+    'connection refused',
+    'dns',
+    'tls',
+    'certificate',
+    'network',
+  ].some((pattern) => lower.includes(pattern));
+  if (!looksLikeNetworkError) return message;
+  return `无法连接 GitHub 更新源。请检查网络、代理/VPN 是否对桌面应用生效，或稍后重试。原始错误：${message}`;
+}
+
 export function DesktopSettings({
   open,
   onClose,
@@ -200,7 +217,7 @@ export function DesktopSettings({
       }
       setAvailableUpdate(update);
     } catch (updateError) {
-      setError(`检查更新失败：${errorMessage(updateError)}`);
+      setError(`检查更新失败：${updateErrorMessage(updateError)}`);
     } finally {
       setUpdateChecking(false);
     }

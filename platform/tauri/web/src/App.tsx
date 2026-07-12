@@ -149,6 +149,12 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isDevtoolsShortcut(event: KeyboardEvent) {
+  const key = event.key.toLowerCase();
+  const modifier = event.ctrlKey || event.metaKey;
+  return key === 'f12' || (modifier && event.shiftKey && ['i', 'j', 'c'].includes(key));
+}
+
 function sameUid(left: string, right: string) {
   return Boolean(left && right && normalizeUid(left) === normalizeUid(right));
 }
@@ -329,6 +335,25 @@ function App() {
   }, [leftView, queue.data, search.data, selectedId]);
   const healthOk = health.data.length > 0 && health.data.every((item) => item.ok);
   const pageNumber = Math.floor(offset / pageSize) + 1;
+
+  useEffect(() => {
+    function blockContextMenu(event: MouseEvent) {
+      event.preventDefault();
+    }
+
+    function blockDevtoolsShortcut(event: KeyboardEvent) {
+      if (!isDevtoolsShortcut(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    document.addEventListener('contextmenu', blockContextMenu);
+    document.addEventListener('keydown', blockDevtoolsShortcut, true);
+    return () => {
+      document.removeEventListener('contextmenu', blockContextMenu);
+      document.removeEventListener('keydown', blockDevtoolsShortcut, true);
+    };
+  }, []);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;

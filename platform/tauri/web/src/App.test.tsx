@@ -672,6 +672,38 @@ describe('MiaoGent workbench', () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith('open_devtools', { password: 'iopp' });
   });
 
+  it('全局阻止右键和 DevTools 快捷键但不阻止普通复制快捷键', async () => {
+    installFetch();
+    render(<App />);
+
+    const contextMenuEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    document.dispatchEvent(contextMenuEvent);
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+
+    const f12Event = new KeyboardEvent('keydown', { key: 'F12', bubbles: true, cancelable: true });
+    document.dispatchEvent(f12Event);
+    expect(f12Event.defaultPrevented).toBe(true);
+
+    const inspectEvent = new KeyboardEvent('keydown', {
+      key: 'I',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(inspectEvent);
+    expect(inspectEvent.defaultPrevented).toBe(true);
+
+    const copyEvent = new KeyboardEvent('keydown', {
+      key: 'c',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(copyEvent);
+    expect(copyEvent.defaultPrevented).toBe(false);
+  });
+
   it('提供全部、待回复、重要、紧急、一般五个 Agent 视图并使用正交筛选', async () => {
     const user = userEvent.setup();
     const fetchMock = installFetch({

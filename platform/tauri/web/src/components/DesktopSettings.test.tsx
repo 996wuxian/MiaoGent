@@ -237,6 +237,19 @@ describe('DesktopSettings', () => {
     expect(screen.getByText('当前已经是最新版本。')).toBeInTheDocument();
   });
 
+  it('explains GitHub updater network failures in Chinese', async () => {
+    desktopMocks.checkDesktopUpdate.mockRejectedValue(
+      new Error('error sending request for url (https://github.com/996wuxian/MiaoGent/releases/latest/download/latest.json)'),
+    );
+    const user = userEvent.setup();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+
+    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法连接 GitHub 更新源');
+    expect(screen.getByRole('alert')).toHaveTextContent('原始错误：error sending request for url');
+  });
+
   it('requires confirmation before installing a desktop update', async () => {
     desktopMocks.checkDesktopUpdate.mockResolvedValue({
       available: true,
