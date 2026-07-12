@@ -175,6 +175,19 @@ fn restart_backend(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn prepare_desktop_update(app: AppHandle) -> Result<(), String> {
+    sidecar::stop(&app);
+    app.emit(
+        "qq-mail-event",
+        serde_json::json!({
+            "event": "watcher_status",
+            "payload": { "status": "desktop_update_prepared" }
+        }),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn open_devtools(app: AppHandle, password: String) -> Result<(), String> {
     if password != "iopp" {
         return Err("开发者控制台密码不正确".to_string());
@@ -346,6 +359,7 @@ pub fn run() {
             reset_webview_data_directory,
             open_storage_directory,
             restart_backend,
+            prepare_desktop_update,
             open_devtools,
             autostart_status,
             set_autostart

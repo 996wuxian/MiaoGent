@@ -227,7 +227,8 @@ export function DesktopSettings({
     if (updateInstalling) return;
     setUpdateInstalling(true);
     setError('');
-    setUpdateStatus('正在下载并安装更新…');
+    setUpdateStatus('安装中，稍后将自动进入安装状态…');
+    setAvailableUpdate(null);
     try {
       await installDesktopUpdate();
     } catch (updateError) {
@@ -736,9 +737,9 @@ export function DesktopSettings({
       </div>
       <ConfirmDialog
         state={availableUpdate ? {
-          title: '发现新版本',
-          message: `发现 MiaoGent ${availableUpdate.version ?? ''}，是否下载并安装？安装完成后应用会自动重启。`,
-          confirmLabel: updateInstalling ? '安装中…' : '下载并安装',
+          title: '新版本准备就绪',
+          message: `发现 MiaoGent ${availableUpdate.version ?? ''}，是否现在安装？安装前会先暂停后台 Agent，安装完成后应用会自动重启。`,
+          confirmLabel: updateInstalling ? '安装中…' : '现在安装',
           tone: 'warning',
           details: (
             <div className="cleanup-confirm-detail">

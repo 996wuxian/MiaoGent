@@ -203,6 +203,14 @@ export async function openDevtools(password: string) {
   return invokeDesktop<void>('open_devtools', { password });
 }
 
+export async function prepareDesktopUpdate() {
+  return invokeDesktop<void>('prepare_desktop_update');
+}
+
+export async function restartDesktopBackend() {
+  return invokeDesktop<void>('restart_backend');
+}
+
 export async function checkDesktopUpdate(): Promise<DesktopUpdateInfo> {
   if (!isTauriRuntime()) throw new Error('应用更新只能在 Tauri 应用中使用');
   const { check } = await import('@tauri-apps/plugin-updater');
@@ -233,7 +241,17 @@ export async function installDesktopUpdate() {
   ]);
   const update = await check();
   if (!update) throw new Error('当前没有可安装的新版本。');
-  await update.downloadAndInstall();
+  await prepareDesktopUpdate();
+  try {
+    await update.downloadAndInstall();
+  } catch (error) {
+    try {
+      await restartDesktopBackend();
+    } catch {
+      // Keep the original updater failure visible; backend restart failures are surfaced by desktop events.
+    }
+    throw error;
+  }
   await relaunch();
 }
 

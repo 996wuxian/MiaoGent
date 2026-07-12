@@ -250,7 +250,7 @@ describe('DesktopSettings', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('原始错误：error sending request for url');
   });
 
-  it('requires confirmation before installing a desktop update', async () => {
+  it('requires confirmation before installing a desktop update and then closes the prompt', async () => {
     desktopMocks.checkDesktopUpdate.mockResolvedValue({
       available: true,
       version: '0.1.14',
@@ -263,13 +263,15 @@ describe('DesktopSettings', () => {
 
     await user.click(await screen.findByRole('button', { name: '检查更新' }));
 
-    const dialog = await screen.findByRole('dialog', { name: '发现新版本' });
+    const dialog = await screen.findByRole('dialog', { name: '新版本准备就绪' });
     expect(within(dialog).getByText('当前版本：0.1.13')).toBeInTheDocument();
     expect(within(dialog).getByText('新版本：0.1.14')).toBeInTheDocument();
     expect(desktopMocks.installDesktopUpdate).not.toHaveBeenCalled();
 
-    await user.click(within(dialog).getByRole('button', { name: '下载并安装' }));
+    await user.click(within(dialog).getByRole('button', { name: '现在安装' }));
 
     await waitFor(() => expect(desktopMocks.installDesktopUpdate).toHaveBeenCalledTimes(1));
+    expect(dialog).not.toBeInTheDocument();
+    expect(screen.getByText('安装中，稍后将自动进入安装状态…')).toBeInTheDocument();
   });
 });
