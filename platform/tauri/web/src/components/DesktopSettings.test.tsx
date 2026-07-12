@@ -242,12 +242,19 @@ describe('DesktopSettings', () => {
       new Error('error sending request for url (https://github.com/996wuxian/MiaoGent/releases/latest/download/latest.json)'),
     );
     const user = userEvent.setup();
-    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+    const onNotify = vi.fn();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} onNotify={onNotify} />);
 
     await user.click(await screen.findByRole('button', { name: '检查更新' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('无法连接 GitHub 更新源');
-    expect(screen.getByRole('alert')).toHaveTextContent('原始错误：error sending request for url');
+    await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
+    expect(onNotify).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('无法连接 GitHub 更新源'),
+      { persist: true },
+    );
+    expect(onNotify.mock.calls[0][1]).toContain('原始错误：error sending request for url');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('requires confirmation before installing a desktop update and then closes the prompt', async () => {
@@ -273,5 +280,30 @@ describe('DesktopSettings', () => {
     await waitFor(() => expect(desktopMocks.installDesktopUpdate).toHaveBeenCalledTimes(1));
     expect(dialog).not.toBeInTheDocument();
     expect(screen.getByText('安装中，稍后将自动进入安装状态…')).toBeInTheDocument();
+  });
+
+  it('reports desktop update installation failures through the global notification callback', async () => {
+    desktopMocks.checkDesktopUpdate.mockResolvedValue({
+      available: true,
+      version: '0.1.14',
+      currentVersion: '0.1.13',
+      date: '2026-07-12T00:00:00Z',
+      body: null,
+    });
+    desktopMocks.installDesktopUpdate.mockRejectedValue(new Error('installer failed'));
+    const user = userEvent.setup();
+    const onNotify = vi.fn();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} onNotify={onNotify} />);
+
+    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+    await user.click(await screen.findByRole('button', { name: '现在安装' }));
+
+    await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
+    expect(onNotify).toHaveBeenCalledWith(
+      'error',
+      '安装更新失败：installer failed',
+      { persist: true },
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

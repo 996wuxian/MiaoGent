@@ -39,6 +39,9 @@ type FormState = {
   clearDeepseekApiKey: boolean;
 };
 
+type SettingsNotifyKind = 'success' | 'error' | 'loading';
+type SettingsNotifyOptions = { persist?: boolean; durationMs?: number };
+
 const emptyForm: FormState = {
   mailAddress: '',
   mailAuthCode: '',
@@ -94,12 +97,14 @@ export function DesktopSettings({
   onClose,
   onSaved,
   onCleared,
+  onNotify,
   mode = 'settings',
 }: {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
   onCleared?: (report: UserDataCleanupReport) => void;
+  onNotify?: (kind: SettingsNotifyKind, message: string, options?: SettingsNotifyOptions) => void;
   mode?: 'settings' | 'onboarding';
 }) {
   const close = useCallback(() => onClose(), [onClose]);
@@ -157,6 +162,14 @@ export function DesktopSettings({
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function notifyUpdateError(message: string) {
+    if (onNotify) {
+      onNotify('error', message, { persist: true });
+      return;
+    }
+    setError(message);
   }
 
   async function save(event: FormEvent) {
@@ -217,7 +230,7 @@ export function DesktopSettings({
       }
       setAvailableUpdate(update);
     } catch (updateError) {
-      setError(`检查更新失败：${updateErrorMessage(updateError)}`);
+      notifyUpdateError(`检查更新失败：${updateErrorMessage(updateError)}`);
     } finally {
       setUpdateChecking(false);
     }
@@ -232,7 +245,7 @@ export function DesktopSettings({
     try {
       await installDesktopUpdate();
     } catch (updateError) {
-      setError(`安装更新失败：${errorMessage(updateError)}`);
+      notifyUpdateError(`安装更新失败：${errorMessage(updateError)}`);
       setUpdateStatus('');
       setUpdateInstalling(false);
       setAvailableUpdate(null);

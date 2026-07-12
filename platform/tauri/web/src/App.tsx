@@ -1846,6 +1846,7 @@ function App() {
             failedCount > 0 ? { persist: true } : undefined,
           );
         }}
+        onNotify={announce}
       />
     </div>
   );
