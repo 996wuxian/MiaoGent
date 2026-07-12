@@ -481,6 +481,55 @@ describe('MiaoGent workbench', () => {
     expect(screen.queryByRole('dialog', { name: '新邮件已整理' })).not.toBeInTheDocument();
   });
 
+  it('桌面配置完成时收到启动汇总事件也不自动弹窗', async () => {
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    const listeners: Record<string, (event: { payload: unknown }) => void> = {};
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset().mockImplementation(async (eventName?: string, callback?: (event: { payload: unknown }) => void) => {
+      if (eventName && callback) listeners[eventName] = callback;
+      return vi.fn();
+    });
+    tauriMocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'backend_connection') return { base_url: '', token: 'desktop-token' };
+      if (command === 'take_pending_navigation') return null;
+      if (command === 'desktop_config') return desktopConfig();
+      return null;
+    });
+    installFetch({
+      handler: (url) => {
+        if (url === '/api/desktop/startup-summary/latest') return jsonResponse(null);
+        if (url.startsWith('/api/insights')) return jsonResponse([]);
+        return undefined;
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(listeners['qq-mail-event']).toBeTruthy());
+
+    listeners['qq-mail-event']({
+      payload: {
+        event: 'startup_summary',
+        payload: {
+          trigger: 'startup',
+          generated_at: '2026-07-11T04:10:00Z',
+          new_count: 2,
+          processed_count: 2,
+          important_count: 1,
+          urgent_count: 0,
+          reply_count: 1,
+          draft_ready_count: 1,
+          general_count: 1,
+          failed_count: 0,
+          has_more: false,
+          items: [],
+          failures: [],
+        },
+      },
+    });
+
+    expect(screen.queryByRole('dialog', { name: '新邮件已整理' })).not.toBeInTheDocument();
+  });
+
   it('最近邮件列表触底后自动加载下一页并追加', async () => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
     const firstPage = Array.from({ length: 20 }, (_, index) => message(`A${index}`, `第一页 ${index}`));

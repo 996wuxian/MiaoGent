@@ -5,58 +5,57 @@
 </p>
 
 <p align="center">
-  <strong>Local-first QQ Mail AI Agent desktop app for Windows.</strong>
+  <strong>本地优先的 QQ 邮箱 AI Agent 桌面应用 / Local-first QQ Mail AI Agent desktop app.</strong>
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#safety-model">Safety</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#desktop-app">Desktop App</a> ·
+  <a href="#中文">中文</a> ·
+  <a href="#english">English</a> ·
   <a href="#license">License</a>
 </p>
 
-MiaoGent is a local-first, safety-first QQ Mail assistant. It can read your mailbox through IMAP, classify new mail with an LLM, highlight important and urgent messages, prepare reply drafts, and keep a Windows desktop tray app running quietly in the background.
+## 中文
 
-The core rule is simple: **MiaoGent can help you read, classify and draft, but it will not send or delete mail without explicit user action.**
+MiaoGent 是一个本地优先、安全优先的 QQ 邮箱 AI Agent。它可以在 Windows 桌面端常驻托盘，通过 IMAP 同步邮件，用 AI 判断重要程度、识别待回复邮件、生成回复草稿，并把需要你处理的内容集中到工作台里。
 
-## Features
+核心边界很明确：MiaoGent 可以帮你阅读、分类、总结和起草，但不会在没有你明确确认的情况下发送邮件、删除邮件或永久清理邮箱内容。
 
-- **Windows desktop app** powered by Tauri.
-- **Tray resident agent** with close-to-tray behavior.
-- **Startup summary** for newly synced mail.
-- **IMAP IDLE watcher** for new-mail wakeups.
-- **AI priority labels**: general, important, urgent and needs-reply.
-- **Draft generation** for emails that need a response.
-- **Human-in-the-loop sending**: drafts must be reviewed and confirmed manually.
-- **Bundled React workbench** with mail list, reader, actions, drafts and activity log.
-- **Manual in-app update check** through signed GitHub Release artifacts.
-- **SQLite local state** for metadata, insights, drafts and operation logs.
-- **Local-only backend** bound to `127.0.0.1`.
+### 功能
 
-## What it does not do
+- Windows 桌面应用，基于 Tauri。
+- 托盘常驻，关闭窗口默认缩到系统托盘。
+- 登录自启后后台静默整理邮件。
+- IMAP IDLE 监听新邮件。
+- AI 分类：一般、重要、紧急、待回复。
+- 对需要回复的邮件生成本地草稿。
+- 发送前必须人工确认。
+- React 工作台：邮件列表、阅读区、AI 建议、草稿、操作记录。
+- 原生通知：只对重要/紧急等需要关注的内容提醒。
+- 应用内检查更新，基于 GitHub Release 签名产物。
+- SQLite 本地状态：邮件元信息、AI 洞察、草稿、队列状态和操作日志。
+- 本地 sidecar 后端只绑定 `127.0.0.1`。
 
-- It does not auto-send replies.
-- It does not permanently delete mail.
-- It does not expose a public web service.
-- It does not store real secrets in the repository.
-- It does not upload your full mailbox to a server.
+### 不会做什么
 
-## Safety model
+- 不会自动发送回复。
+- 不会永久删除邮件。
+- 不会暴露公网服务。
+- 不会把密钥写入仓库。
+- 不会把整个邮箱上传到第三方服务器。
 
-MiaoGent is designed around explicit boundaries:
+### 安全边界
 
-| Area | Behavior |
+| 范围 | 行为 |
 | --- | --- |
-| Mail access | Reads QQ Mail through IMAP/SMTP using your own account configuration. |
-| LLM usage | Sends selected mail content to the configured LLM only when a feature requires classification, translation or drafting. |
-| Sending | Never sends automatically. The final draft must be opened, reviewed and confirmed. |
-| Deletion | Move-to-trash requires explicit confirmation; permanent deletion is not implemented. |
-| Secrets | `.env` is ignored. Desktop secrets are stored through Windows Credential Manager. |
-| Local server | The sidecar backend binds to `127.0.0.1` and uses a runtime Bearer token. |
-| Local data | SQLite state and exported mail HTML are ignored and should not be committed. |
+| 邮箱访问 | 使用你自己的 QQ 邮箱配置，通过 IMAP/SMTP 访问。 |
+| AI 使用 | 只有分类、翻译、摘要或生成草稿需要时，才把相关邮件内容发送给配置的模型。 |
+| 发送邮件 | 永远不自动发送；必须打开草稿、核对并确认。 |
+| 删除邮件 | 移动到垃圾箱需要确认；未实现永久删除。 |
+| 密钥 | `.env` 被忽略；桌面端密钥保存到 Windows 凭据管理器。 |
+| 本地服务 | sidecar 只监听 `127.0.0.1`，并使用运行期 Bearer token。 |
+| 本地数据 | SQLite、日志、导出 HTML、构建产物都不应提交到 Git。 |
 
-## Architecture
+### 架构
 
 ```text
 QQ Mail IMAP/SMTP
@@ -72,31 +71,150 @@ QQ Mail IMAP/SMTP
                   └── React workbench
 ```
 
-## Project structure
-
-```text
-.
-├── src/qq_mail_agent_cli/      # Python core, mail client, storage, API and desktop worker
-├── platform/
-│   └── tauri/                  # Windows desktop app and bundled React renderer
-├── scripts/                    # Desktop/sidecar build scripts
-├── tests/                      # Python regression tests
-├── docs/                       # Architecture and learning notes
-└── .env.example                # Local development configuration template
-```
-
-## Quick start
-
-### 1. Clone
+### 快速开始
 
 ```powershell
 git clone git@github.com:996wuxian/MiaoGent.git
 cd MiaoGent
+Copy-Item .env.example .env
 ```
 
-### 2. Create local config
+填写你自己的配置：
+
+```env
+QQ_MAIL_ADDRESS=
+QQ_MAIL_AUTH_CODE=
+DEEPSEEK_API_KEY=
+```
+
+QQ 邮箱需要使用客户端授权码，不是登录密码。
+
+安装开发依赖：
 
 ```powershell
+python -m pip install -e ".[desktop,packaging,dev]"
+cd platform\tauri\web
+npm install
+cd ..
+npm install
+```
+
+### 桌面端开发
+
+```powershell
+python -m pip install -e ".[desktop,packaging,dev]"
+cd platform\tauri
+npm install
+npm run dev
+```
+
+构建 Windows 安装包：
+
+```powershell
+.\scripts\build-desktop.ps1
+```
+
+注意：
+
+- 默认没有 Authenticode 代码签名，Windows 可能提示安全警告。
+- Updater 产物需要 `TAURI_SIGNING_PRIVATE_KEY`。
+- 公共 Release 使用 GitHub Actions secret，不能提交私钥。
+- 构建产物、sidecar exe、`.env` 和本地数据库都被 Git 忽略。
+
+### 常用验证命令
+
+Python：
+
+```powershell
+python -m pytest -q
+```
+
+前端：
+
+```powershell
+cd platform\tauri\web
+npm run test -- --run
+npm exec -- tsc --noEmit
+npm run build
+```
+
+Tauri / Rust：
+
+```powershell
+cd platform\tauri\src-tauri
+cargo fmt --check
+cargo check --locked
+cargo test --locked
+```
+
+### 数据与隐私
+
+发布或 fork 前，请确认没有提交这些本地数据：
+
+- `.env`
+- `.mail_agent_state/`
+- `.mail_exports/`
+- `logs/`
+- `*.sqlite`
+- `*.db`
+- `build/`
+- `platform/tauri/web/dist/`
+- `platform/tauri/src-tauri/target/`
+- `platform/tauri/src-tauri/binaries/*.exe`
+
+### 文档
+
+- [架构说明](docs/architecture.md)
+- [结构评审](docs/structure-review.md)
+- [学习笔记](docs/learning-notes.md)
+- [平台说明](platform/README.md)
+
+## English
+
+MiaoGent is a local-first, safety-first QQ Mail AI Agent desktop app. It runs quietly in the Windows tray, syncs mail through IMAP, classifies messages with an LLM, highlights important and urgent mail, prepares reply drafts, and gives you a focused workbench for handling what matters.
+
+The main rule is simple: MiaoGent can help you read, classify, summarize and draft, but it will not send or delete mail without explicit user confirmation.
+
+### Features
+
+- Windows desktop app powered by Tauri.
+- Tray resident agent with close-to-tray behavior.
+- Silent background mail sync after Windows login.
+- IMAP IDLE watcher for new mail.
+- AI labels: general, important, urgent and needs-reply.
+- Local draft generation for messages that need a response.
+- Human-in-the-loop sending.
+- React workbench for mail list, reader, AI suggestions, drafts and activity logs.
+- Native notifications for important or urgent items.
+- Manual in-app update checks using signed GitHub Release artifacts.
+- SQLite local state for metadata, insights, drafts, queues and logs.
+- Local-only sidecar backend bound to `127.0.0.1`.
+
+### What it does not do
+
+- It does not auto-send replies.
+- It does not permanently delete mail.
+- It does not expose a public web service.
+- It does not store secrets in the repository.
+- It does not upload your full mailbox to a hosted service.
+
+### Safety model
+
+| Area | Behavior |
+| --- | --- |
+| Mail access | Uses your own QQ Mail configuration through IMAP/SMTP. |
+| LLM usage | Sends relevant mail content to the configured model only when classification, translation, summarization or drafting needs it. |
+| Sending | Never sends automatically; drafts must be reviewed and confirmed. |
+| Deletion | Move-to-trash requires confirmation; permanent deletion is not implemented. |
+| Secrets | `.env` is ignored; desktop secrets are stored in Windows Credential Manager. |
+| Local server | The sidecar listens on `127.0.0.1` and uses a runtime Bearer token. |
+| Local data | SQLite state, logs, exported HTML and build artifacts should not be committed. |
+
+### Quick start
+
+```powershell
+git clone git@github.com:996wuxian/MiaoGent.git
+cd MiaoGent
 Copy-Item .env.example .env
 ```
 
@@ -110,7 +228,7 @@ DEEPSEEK_API_KEY=
 
 QQ Mail requires a client authorization code instead of your login password.
 
-### 3. Install development dependencies
+Install dependencies:
 
 ```powershell
 python -m pip install -e ".[desktop,packaging,dev]"
@@ -120,9 +238,7 @@ cd ..
 npm install
 ```
 
-## Desktop app
-
-For Windows desktop development:
+### Desktop development
 
 ```powershell
 python -m pip install -e ".[desktop,packaging,dev]"
@@ -131,7 +247,7 @@ npm install
 npm run dev
 ```
 
-To build a Windows installer:
+Build a Windows installer:
 
 ```powershell
 .\scripts\build-desktop.ps1
@@ -139,21 +255,17 @@ To build a Windows installer:
 
 Notes:
 
-- The installer is not code-signed by default.
-- Windows may show a security warning for unsigned builds.
-- Updater artifacts require `TAURI_SIGNING_PRIVATE_KEY`. Public releases use a GitHub Actions secret; do not commit the private key.
-- Build outputs are ignored by Git.
-- The generated Python sidecar executable is not committed.
+- The installer is not Authenticode-signed by default.
+- Windows may show a warning for unsigned builds.
+- Updater artifacts require `TAURI_SIGNING_PRIVATE_KEY`.
+- Public releases use a GitHub Actions secret. Do not commit the private key.
+- Build outputs, the generated sidecar executable, `.env` and local databases are ignored by Git.
 
-## Development commands
-
-Python tests:
+### Development commands
 
 ```powershell
 python -m pytest -q
 ```
-
-Renderer tests and build:
 
 ```powershell
 cd platform\tauri\web
@@ -162,8 +274,6 @@ npm exec -- tsc --noEmit
 npm run build
 ```
 
-Tauri checks:
-
 ```powershell
 cd platform\tauri\src-tauri
 cargo fmt --check
@@ -171,27 +281,9 @@ cargo check --locked
 cargo test --locked
 ```
 
-## Configuration
+### Privacy
 
-`.env.example` contains only empty placeholders and safe defaults.
-
-Important variables:
-
-| Variable | Description |
-| --- | --- |
-| `QQ_MAIL_ADDRESS` | Your QQ Mail address. |
-| `QQ_MAIL_AUTH_CODE` | QQ Mail client authorization code. Do not commit it. |
-| `QQ_MAIL_IMAP_HOST` | Defaults to `imap.qq.com`. |
-| `QQ_MAIL_IMAP_PORT` | Defaults to `993`. |
-| `QQ_MAIL_SMTP_HOST` | Defaults to `smtp.qq.com`. |
-| `QQ_MAIL_SMTP_PORT` | Defaults to `465`. |
-| `DEEPSEEK_API_KEY` | Your LLM API key. Do not commit it. |
-| `DEEPSEEK_BASE_URL` | Defaults to `https://api.deepseek.com`. |
-| `DEEPSEEK_MODEL` | Defaults to `deepseek-chat`. |
-
-## Data and privacy
-
-Ignored local paths include:
+Before publishing your fork, make sure local data and secrets are not staged:
 
 - `.env`
 - `.mail_agent_state/`
@@ -200,29 +292,9 @@ Ignored local paths include:
 - `*.sqlite`
 - `*.db`
 - `build/`
-- `web/`
 - `platform/tauri/web/dist/`
 - `platform/tauri/src-tauri/target/`
 - `platform/tauri/src-tauri/binaries/*.exe`
-
-Before publishing your fork, check that none of these files are staged.
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Structure review](docs/structure-review.md)
-- [Learning notes](docs/learning-notes.md)
-- [Platform notes](platform/README.md)
-
-## Roadmap ideas
-
-- Better onboarding and configuration diagnostics.
-- More robust IMAP IDLE recovery after sleep/network changes.
-- Rich-text draft editing.
-- Attachment awareness.
-- Evaluation harness for classification and draft quality.
-- Authenticode signing for Windows installers.
-- macOS/Linux desktop packaging.
 
 ## License
 

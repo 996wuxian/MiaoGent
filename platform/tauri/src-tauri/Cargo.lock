@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "qq-mail-agent-desktop"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "keyring",
  "log",

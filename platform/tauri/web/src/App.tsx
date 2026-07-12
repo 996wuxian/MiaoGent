@@ -432,9 +432,6 @@ function App() {
         if (disposed) return;
         if (event.event === 'startup_summary' || event.event === 'sync_summary') {
           setStartupSummary({ data: event.payload as unknown as StartupSummary, loading: false, error: '' });
-          if (event.event === 'startup_summary' && !desktopConfigIncompleteRef.current) {
-            setStartupSummaryOpen(true);
-          }
         }
         if (event.event === 'watcher_status') {
           const status = event.payload.status;
