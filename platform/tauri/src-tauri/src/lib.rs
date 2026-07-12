@@ -11,6 +11,8 @@ mod desktop_config;
 mod notifications;
 mod sidecar;
 
+const RELEASE_PAGE_URL: &str = "https://github.com/996wuxian/MiaoGent/releases/latest";
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum NavigationTarget {
@@ -167,6 +169,11 @@ fn reset_webview_data_directory(
 #[tauri::command]
 fn open_storage_directory(path: String) -> Result<(), String> {
     desktop_config::open_directory(path)
+}
+
+#[tauri::command]
+fn open_release_page() -> Result<(), String> {
+    open::that(RELEASE_PAGE_URL).map_err(|error| format!("无法打开下载页面：{error}"))
 }
 
 #[tauri::command]
@@ -358,6 +365,7 @@ pub fn run() {
             set_webview_data_directory,
             reset_webview_data_directory,
             open_storage_directory,
+            open_release_page,
             restart_backend,
             prepare_desktop_update,
             open_devtools,

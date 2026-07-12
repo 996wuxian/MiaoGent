@@ -191,6 +191,10 @@ export function openStorageDirectory(path: string) {
   return invokeDesktop<void>('open_storage_directory', { path });
 }
 
+export function openDesktopReleasePage() {
+  return invokeDesktop<void>('open_release_page');
+}
+
 export async function getAutostartStatus() {
   return invokeDesktop<{ enabled: boolean }>('autostart_status');
 }

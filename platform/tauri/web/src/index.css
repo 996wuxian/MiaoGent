@@ -270,6 +270,22 @@ select:focus-visible,
   color: var(--color-danger);
 }
 
+.toast-action {
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.toast-action:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
 .toast-close {
   display: grid;
   width: 26px;

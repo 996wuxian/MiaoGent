@@ -11,6 +11,7 @@ import {
   isTauriRuntime,
   getDesktopConfig,
   isDesktopConfigComplete,
+  openDesktopReleasePage,
   openDevtools,
   shouldRefreshDesktopData,
   type DesktopTarget,
@@ -100,8 +101,20 @@ type Resource<T> = {
 };
 
 type FeedbackKind = 'success' | 'error' | 'loading';
-type Feedback = { kind: FeedbackKind; message: string; persist: boolean; durationMs: number | null } | null;
-type FeedbackOptions = { persist?: boolean; durationMs?: number };
+type FeedbackAction = { label: string; onClick: () => void };
+type Feedback = {
+  kind: FeedbackKind;
+  message: string;
+  persist: boolean;
+  durationMs: number | null;
+  action?: FeedbackAction;
+} | null;
+type FeedbackOptions = {
+  persist?: boolean;
+  durationMs?: number;
+  actionLabel?: string;
+  onAction?: () => void;
+};
 
 type SearchFilters = {
   keyword: string;
@@ -513,7 +526,15 @@ function App() {
     }
     const persist = options.persist ?? kind !== 'success';
     const durationMs = persist ? null : options.durationMs ?? 2000;
-    setFeedback({ kind, message, persist, durationMs });
+    setFeedback({
+      kind,
+      message,
+      persist,
+      durationMs,
+      ...(options.actionLabel && options.onAction
+        ? { action: { label: options.actionLabel, onClick: options.onAction } }
+        : {}),
+    });
     if (durationMs !== null) {
       feedbackTimerRef.current = window.setTimeout(() => {
         feedbackTimerRef.current = null;
@@ -523,6 +544,14 @@ function App() {
             : current
         ));
       }, durationMs);
+    }
+  }
+
+  async function openReleaseDownloadPage() {
+    try {
+      await openDesktopReleasePage();
+    } catch (error) {
+      announce('error', `打开下载页面失败：${errorMessage(error)}`);
     }
   }
 
@@ -1502,6 +1531,11 @@ function App() {
               <AppIcon icon={feedback.kind === 'error' ? 'danger-triangle-outline' : feedback.kind === 'success' ? 'check-circle-outline' : 'refresh-outline'} />
             </span>
             <span>{feedback.message}</span>
+            {feedback.action && (
+              <button className="toast-action" type="button" onClick={feedback.action.onClick}>
+                {feedback.action.label}
+              </button>
+            )}
             {feedback.kind !== 'loading' && <button className="toast-close" aria-label="关闭提示" onClick={() => setFeedback(null)}>×</button>}
           </div>
         )}
@@ -1847,6 +1881,7 @@ function App() {
           );
         }}
         onNotify={announce}
+        onOpenReleasePage={() => void openReleaseDownloadPage()}
       />
     </div>
   );

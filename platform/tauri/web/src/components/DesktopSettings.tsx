@@ -40,7 +40,12 @@ type FormState = {
 };
 
 type SettingsNotifyKind = 'success' | 'error' | 'loading';
-type SettingsNotifyOptions = { persist?: boolean; durationMs?: number };
+type SettingsNotifyOptions = {
+  persist?: boolean;
+  durationMs?: number;
+  actionLabel?: string;
+  onAction?: () => void;
+};
 
 const emptyForm: FormState = {
   mailAddress: '',
@@ -98,6 +103,7 @@ export function DesktopSettings({
   onSaved,
   onCleared,
   onNotify,
+  onOpenReleasePage,
   mode = 'settings',
 }: {
   open: boolean;
@@ -105,6 +111,7 @@ export function DesktopSettings({
   onSaved: () => void;
   onCleared?: (report: UserDataCleanupReport) => void;
   onNotify?: (kind: SettingsNotifyKind, message: string, options?: SettingsNotifyOptions) => void;
+  onOpenReleasePage?: () => void;
   mode?: 'settings' | 'onboarding';
 }) {
   const close = useCallback(() => onClose(), [onClose]);
@@ -166,7 +173,10 @@ export function DesktopSettings({
 
   function notifyUpdateError(message: string) {
     if (onNotify) {
-      onNotify('error', message, { persist: true });
+      onNotify('error', message, {
+        persist: true,
+        ...(onOpenReleasePage ? { actionLabel: '去官网下载', onAction: onOpenReleasePage } : {}),
+      });
       return;
     }
     setError(message);

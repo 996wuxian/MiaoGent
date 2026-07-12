@@ -243,7 +243,16 @@ describe('DesktopSettings', () => {
     );
     const user = userEvent.setup();
     const onNotify = vi.fn();
-    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} onNotify={onNotify} />);
+    const onOpenReleasePage = vi.fn();
+    render(
+      <DesktopSettings
+        open
+        onClose={() => undefined}
+        onSaved={() => undefined}
+        onNotify={onNotify}
+        onOpenReleasePage={onOpenReleasePage}
+      />,
+    );
 
     await user.click(await screen.findByRole('button', { name: '检查更新' }));
 
@@ -251,9 +260,11 @@ describe('DesktopSettings', () => {
     expect(onNotify).toHaveBeenCalledWith(
       'error',
       expect.stringContaining('无法连接 GitHub 更新源'),
-      { persist: true },
+      expect.objectContaining({ persist: true, actionLabel: '去官网下载' }),
     );
     expect(onNotify.mock.calls[0][1]).toContain('原始错误：error sending request for url');
+    onNotify.mock.calls[0][2].onAction();
+    expect(onOpenReleasePage).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -293,7 +304,16 @@ describe('DesktopSettings', () => {
     desktopMocks.installDesktopUpdate.mockRejectedValue(new Error('installer failed'));
     const user = userEvent.setup();
     const onNotify = vi.fn();
-    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} onNotify={onNotify} />);
+    const onOpenReleasePage = vi.fn();
+    render(
+      <DesktopSettings
+        open
+        onClose={() => undefined}
+        onSaved={() => undefined}
+        onNotify={onNotify}
+        onOpenReleasePage={onOpenReleasePage}
+      />,
+    );
 
     await user.click(await screen.findByRole('button', { name: '检查更新' }));
     await user.click(await screen.findByRole('button', { name: '现在安装' }));
@@ -302,8 +322,10 @@ describe('DesktopSettings', () => {
     expect(onNotify).toHaveBeenCalledWith(
       'error',
       '安装更新失败：installer failed',
-      { persist: true },
+      expect.objectContaining({ persist: true, actionLabel: '去官网下载' }),
     );
+    onNotify.mock.calls[0][2].onAction();
+    expect(onOpenReleasePage).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
