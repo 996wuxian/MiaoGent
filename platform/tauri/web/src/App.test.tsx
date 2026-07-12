@@ -378,7 +378,7 @@ describe('MiaoGent workbench', () => {
     expect(await screen.findByText('已标记为不准确')).toBeInTheDocument();
   });
 
-  it('桌面端刷新工作台会先同步邮箱并重拉最近邮件第一页', async () => {
+  it('桌面端刷新工作台会先同步邮箱并重拉全部邮件视图', async () => {
     vi.stubGlobal('__TAURI_INTERNALS__', {});
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset().mockResolvedValue(vi.fn());
@@ -390,7 +390,7 @@ describe('MiaoGent workbench', () => {
     });
     const calls: string[] = [];
     const fetchMock = installFetch({
-      recent: [],
+      recent: [message('NEW', '新招聘邮件')],
       handler: (url, init) => {
         calls.push(`${init?.method ?? 'GET'} ${url}`);
         if (url === '/api/desktop/startup-summary/latest') return jsonResponse(null);
@@ -411,7 +411,6 @@ describe('MiaoGent workbench', () => {
             failures: [],
           });
         }
-        if (url === '/api/messages/recent?limit=20&offset=0') return jsonResponse([message('NEW', '新招聘邮件')]);
         if (url.startsWith('/api/insights')) return jsonResponse([]);
         return undefined;
       },
@@ -419,16 +418,16 @@ describe('MiaoGent workbench', () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole('tab', { name: '最近' }));
+    await user.click(await screen.findByRole('tab', { name: '邮件' }));
     await user.click(screen.getByRole('button', { name: '刷新工作台' }));
 
     expect(await screen.findByText('新招聘邮件')).toBeInTheDocument();
     const syncIndex = calls.findIndex((call) => call === 'POST /api/desktop/sync');
-    const recentIndex = calls.findIndex(
-      (call, index) => index > syncIndex && call === 'GET /api/messages/recent?limit=20&offset=0',
+    const mailboxIndex = calls.findIndex(
+      (call, index) => index > syncIndex && call === 'GET /api/messages/recent?limit=100&offset=0',
     );
     expect(syncIndex).toBeGreaterThanOrEqual(0);
-    expect(recentIndex).toBeGreaterThan(syncIndex);
+    expect(mailboxIndex).toBeGreaterThan(syncIndex);
     expect(fetchMock).toHaveBeenCalledWith('/api/desktop/sync', expect.objectContaining({ method: 'POST' }));
   });
 
@@ -530,31 +529,14 @@ describe('MiaoGent workbench', () => {
     expect(document.querySelector('.startup-summary-drawer')).not.toBeInTheDocument();
   });
 
-  it('最近邮件列表触底后自动加载下一页并追加', async () => {
+  it('左侧一级入口不再显示最近，邮件入口承载全部视图', async () => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
-    const firstPage = Array.from({ length: 20 }, (_, index) => message(`A${index}`, `第一页 ${index}`));
-    const secondPage = [message('B1', '第二页招聘邮件')];
-    const fetchMock = installFetch({
-      handler: (url) => {
-        if (url === '/api/messages/recent?limit=20&offset=0') return jsonResponse(firstPage);
-        if (url === '/api/messages/recent?limit=20&offset=20') return jsonResponse(secondPage);
-        return undefined;
-      },
-    });
+    installFetch({ recent: [message('M1', '全部视图邮件')] });
     render(<App />);
-    await screen.findByText('第一页 0');
 
-    const list = document.querySelector('.mail-list') as HTMLElement;
-    Object.defineProperty(list, 'scrollTop', { configurable: true, value: 900 });
-    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 300 });
-    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1100 });
-    fireEvent.scroll(list);
-
-    expect(await screen.findByText('第二页招聘邮件')).toBeInTheDocument();
-    expect(screen.getByText('第一页 0')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith('/api/messages/recent?limit=20&offset=20', expect.anything()),
-    );
+    expect(await screen.findByRole('tab', { name: '邮件' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: '最近' })).not.toBeInTheDocument();
+    expect(await screen.findByText('全部视图邮件')).toBeInTheDocument();
   });
 
   it('全部页以当前邮箱列表为基准，合并洞察后排序并隐藏已处理项', async () => {

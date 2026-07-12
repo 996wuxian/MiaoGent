@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, isAbortError } from './api';
 import miaogentLogo from './assets/miaogent-logo.png';
 import { ConfirmDetail, ConfirmDialog, ConfirmDraft, DevtoolsPasswordDialog, HealthDrawer } from './components/Dialogs';
@@ -86,7 +86,7 @@ const externalHealthLabel = {
 } as const;
 
 type Theme = 'light' | 'dark';
-type LeftView = 'recent' | 'queue' | 'search' | 'insights';
+type LeftView = 'insights' | 'queue' | 'search';
 type RightView = 'actions' | 'drafts' | 'history';
 type MobileStage = 'list' | 'reading' | 'right';
 type MessageContentView = 'source' | 'translation';
@@ -140,10 +140,6 @@ type ListItem = {
   analysisStatus?: string;
   confidence?: number;
   draftId?: string | null;
-};
-
-type LoadRecentOptions = {
-  append?: boolean;
 };
 
 const emptySearchFilters: SearchFilters = {
@@ -231,18 +227,6 @@ function formatMailDate(value: string | null | undefined, mode: 'list' | 'detail
   return year === new Date().getFullYear() ? `${month}-${day} ${time}` : `${year}-${month}-${day} ${time}`;
 }
 
-function mergeRecentMessages(existing: MailMessage[], incoming: MailMessage[]) {
-  const seen = new Set(existing.map((item) => normalizeUid(item.id)));
-  const merged = [...existing];
-  for (const item of incoming) {
-    const key = normalizeUid(item.id);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(item);
-  }
-  return merged;
-}
-
 function initialTheme(): Theme {
   const saved = window.localStorage.getItem('qq-mail-agent-theme');
   if (saved === 'light' || saved === 'dark') return saved;
@@ -251,12 +235,11 @@ function initialTheme(): Theme {
 
 function App() {
   const desktopRuntime = isTauriRuntime();
-  const initialLeftView = desktopRuntime ? 'insights' : 'recent';
+  const initialLeftView: LeftView = 'insights';
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [leftView, setLeftView] = useState<LeftView>(initialLeftView);
   const [rightView, setRightView] = useState<RightView>('actions');
   const [mobileStage, setMobileStage] = useState<MobileStage>('list');
-  const [recent, setRecent] = useState<Resource<MailMessage[]>>(resource([]));
   const [queue, setQueue] = useState<Resource<TriageItem[]>>(resource([]));
   const [search, setSearch] = useState<Resource<SearchMailItem[]>>(resource([]));
   const [insights, setInsights] = useState<Resource<MailInsight[]>>(resource([]));
@@ -273,8 +256,6 @@ function App() {
   const [selectedId, setSelectedId] = useState('');
   const [selectedDraftId, setSelectedDraftId] = useState('');
   const [draftEditor, setDraftEditor] = useState<DraftEditorState | null>(null);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
   const [queueStatus, setQueueStatus] = useState<QueueStatus>('pending');
   const [draftFilter, setDraftFilter] = useState<DraftFilter>('pending');
   const [sendingDraftId, setSendingDraftId] = useState('');
@@ -307,7 +288,6 @@ function App() {
   const draftEditorRef = useRef<DraftEditorState | null>(null);
   const sendingDraftIdRef = useRef('');
   const selectionRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
-  const recentRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
   const queueRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
   const searchRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
   const insightsRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({ sequence: 0, controller: null });
@@ -344,8 +324,6 @@ function App() {
     return searched ? searchToTriage(searched) : undefined;
   }, [leftView, queue.data, search.data, selectedId]);
   const healthOk = health.data.length > 0 && health.data.every((item) => item.ok);
-  const pageNumber = Math.floor(offset / pageSize) + 1;
-
   useEffect(() => {
     function blockContextMenu(event: MouseEvent) {
       event.preventDefault();
@@ -408,7 +386,7 @@ function App() {
     didInitRef.current = true;
     if (isTauriRuntime()) return;
     void loadLocalHealth();
-    void loadRecent(0);
+    void loadInsights('all');
     void loadQueue('pending');
     void loadDrafts('pending', { forceEditor: true });
     void loadActions();
@@ -472,7 +450,8 @@ function App() {
     } else {
       mailViewRef.current = 'all';
       setMailView('all');
-      switchLeftView('recent');
+      switchLeftView('insights');
+      void loadInsights('all');
       void selectMessage(desktopTarget.uid, { markSeenOnOpen: false });
     }
     setDesktopTarget(null);
@@ -669,33 +648,6 @@ function App() {
     }
   }
 
-  async function loadRecent(nextOffset: number, options: LoadRecentOptions = {}) {
-    recentRequestRef.current.controller?.abort();
-    const sequence = recentRequestRef.current.sequence + 1;
-    const controller = new AbortController();
-    recentRequestRef.current = { sequence, controller };
-    const append = options.append === true;
-    setRecent((current) => ({ ...current, loading: true, error: '' }));
-    try {
-      const items = await api.recentMessages(pageSize, nextOffset, controller.signal);
-      if (recentRequestRef.current.sequence !== sequence) return;
-      setRecent((current) => ({
-        data: append ? mergeRecentMessages(current.data, items) : items,
-        loading: false,
-        error: '',
-      }));
-      setOffset(nextOffset);
-      setHasMore(items.length === pageSize);
-      if (!append && leftViewRef.current === 'recent' && selectedIdRef.current && !items.some((item) => sameUid(item.id, selectedIdRef.current))) {
-        clearSelection();
-      }
-      if (!append && items.length === 0 && leftViewRef.current === 'recent') clearSelection();
-    } catch (error) {
-      if (isAbortError(error) || recentRequestRef.current.sequence !== sequence) return;
-      setRecent((current) => ({ ...current, loading: false, error: errorMessage(error) }));
-    }
-  }
-
   async function loadQueue(status: QueueStatus) {
     queueRequestRef.current.controller?.abort();
     const sequence = queueRequestRef.current.sequence + 1;
@@ -782,9 +734,7 @@ function App() {
           ? loadInsights(currentMailView)
           : currentLeftView === 'queue'
             ? loadQueue(queueStatusRef.current)
-            : currentLeftView === 'search'
-              ? runSearch(appliedSearchFiltersRef.current)
-              : loadRecent(0);
+            : runSearch(appliedSearchFiltersRef.current);
       void Promise.all([listTask, loadDrafts(draftFilterRef.current), loadActions()]);
     }, 120);
   }
@@ -812,11 +762,13 @@ function App() {
       try {
         const summary = await syncDesktopMailbox();
         const currentMailView = mailViewRef.current;
-        await Promise.all([
-          leftViewRef.current === 'insights' ? loadInsights(currentMailView) : loadRecent(0),
-          loadDrafts(draftFilterRef.current),
-          loadActions(),
-        ]);
+        const listTask =
+          leftViewRef.current === 'queue'
+            ? loadQueue(queueStatusRef.current)
+            : leftViewRef.current === 'search'
+              ? runSearch(appliedSearchFiltersRef.current)
+              : loadInsights(currentMailView);
+        await Promise.all([listTask, loadDrafts(draftFilterRef.current), loadActions()]);
         announce('success', `整理完成：新增 ${summary.new_count} 封，${summary.reply_count} 封待回复。`);
       } catch (error) {
         announce('error', `整理失败：${errorMessage(error)}`);
@@ -896,10 +848,6 @@ function App() {
   }
 
   function updateSeenEverywhere(uid: string) {
-    setRecent((current) => ({
-      ...current,
-      data: current.data.map((item) => (sameUid(item.id, uid) ? { ...item, is_seen: true } : item)),
-    }));
     setAgentMailbox((current) => ({
       ...current,
       data: current.data.map((item) => (sameUid(item.id, uid) ? { ...item, is_seen: true } : item)),
@@ -1086,7 +1034,7 @@ function App() {
         announce('success', '邮件已移动到垃圾箱。');
         clearSelection();
         await Promise.all([
-          loadRecent(offset),
+          loadInsights(mailViewRef.current),
           loadQueue(queueStatusRef.current),
           loadActions(),
           refreshSearchIfInitialized(),
@@ -1347,22 +1295,13 @@ function App() {
       }
     }
     const listTask =
-      leftViewRef.current === 'recent'
-        ? loadRecent(0)
-        : leftViewRef.current === 'queue'
-          ? loadQueue(queueStatusRef.current)
-          : leftViewRef.current === 'insights'
-            ? loadInsights(mailViewRef.current)
-            : runSearch(appliedSearchFiltersRef.current);
+      leftViewRef.current === 'queue'
+        ? loadQueue(queueStatusRef.current)
+        : leftViewRef.current === 'search'
+          ? runSearch(appliedSearchFiltersRef.current)
+          : loadInsights(mailViewRef.current);
     await Promise.all([listTask, loadLocalHealth(), loadDrafts(draftFilterRef.current, { forceEditor: true }), loadActions()]);
     announce('success', '工作台已刷新。');
-  }
-
-  function handleMailListScroll(event: UIEvent<HTMLDivElement>) {
-    if (leftViewRef.current !== 'recent' || recent.loading || !hasMore) return;
-    const target = event.currentTarget;
-    if (target.scrollTop + target.clientHeight < target.scrollHeight - 96) return;
-    void loadRecent(offset + pageSize, { append: true });
   }
 
   function ensureSelectedMailVisible() {
@@ -1397,10 +1336,10 @@ function App() {
     }
     if (view === 'queue' && queue.data.length === 0 && !queue.loading) void loadQueue(queueStatusRef.current);
     if (view === 'search' && search.data.length === 0 && !search.loading) void runSearch(searchFilters);
+    if (view === 'insights' && insights.data.length === 0 && !insights.loading) void loadInsights(mailViewRef.current);
   }
 
   const listItems = useMemo<ListItem[]>(() => {
-    if (leftView === 'recent') return recent.data.map(messageToListItem);
     if (leftView === 'queue') return queue.data.map(triageToListItem);
     if (leftView === 'insights') {
       const insightMap = new Map(insights.data.map((item) => [normalizeUid(item.uid), item]));
@@ -1427,8 +1366,8 @@ function App() {
       ];
     }
     return search.data.map(searchToListItem);
-  }, [agentMailbox.data, fetchFailures, insights.data, leftView, mailView, queue.data, recent.data, search.data]);
-  const activeListResource = leftView === 'recent' ? recent : leftView === 'queue' ? queue : leftView === 'insights' ? insights : search;
+  }, [agentMailbox.data, fetchFailures, insights.data, leftView, mailView, queue.data, search.data]);
+  const activeListResource = leftView === 'queue' ? queue : leftView === 'insights' ? insights : search;
   const selectedInsightRequiresReview = Boolean(
     selectedInsight.data &&
       (selectedInsight.data.analysis_status !== 'analyzed' || selectedInsight.data.confidence < 0.55),
@@ -1540,26 +1479,12 @@ function App() {
             label="邮件列表视图"
             value={leftView}
             options={[
-              { value: 'recent', label: '最近' },
+              { value: 'insights', label: '邮件' },
               { value: 'queue', label: 'AI 待办' },
               { value: 'search', label: '搜索' },
             ]}
             onChange={switchLeftView}
           />
-
-          {leftView === 'recent' && (
-            <PanelHeader
-              title="最近邮件"
-              meta={`第 ${pageNumber} 页 · ${recent.data.length} 封`}
-              metaInline
-              actions={
-                <>
-                  <IconButton icon="alt-arrow-left-outline" label="上一页" disabled={offset === 0 || recent.loading} onClick={() => void loadRecent(Math.max(0, offset - pageSize))} />
-                  <IconButton icon="alt-arrow-right-outline" label="下一页" disabled={!hasMore || recent.loading} onClick={() => void loadRecent(offset + pageSize)} />
-                </>
-              }
-            />
-          )}
 
           {leftView === 'queue' && (
             <div className="list-controls-block">
@@ -1605,15 +1530,14 @@ function App() {
             <InlineError
               message={activeListResource.error}
               onRetry={() => {
-                if (leftView === 'recent') void loadRecent(offset);
-                else if (leftView === 'queue') void loadQueue(queueStatus);
+                if (leftView === 'queue') void loadQueue(queueStatus);
                 else if (leftView === 'insights') void loadInsights(mailView);
                 else void runSearch(appliedSearchFilters);
               }}
             />
           )}
           <div className="mail-list-shell">
-            <div ref={mailListRef} className="mail-list scroll-area" aria-busy={activeListResource.loading} onScroll={handleMailListScroll}>
+            <div ref={mailListRef} className="mail-list scroll-area" aria-busy={activeListResource.loading}>
               {listItems.map((item) => (
                 <MailListCard
                   key={`${leftView}-${item.uid}`}
@@ -1629,15 +1553,8 @@ function App() {
               {!activeListResource.loading && listItems.length === 0 && (
                 <EmptyState
                   icon={leftView === 'search' ? 'inbox-unread-outline' : 'clipboard-remove-outline'}
-                  title={leftView === 'recent' ? '当前页没有邮件' : leftView === 'queue' ? `暂无${queueLabel[queueStatus]}事项` : leftView === 'insights' ? '当前视图没有邮件' : '没有匹配结果'}
-                  detail={leftView === 'recent' && offset > 0 ? '可以返回上一页' : undefined}
+                  title={leftView === 'queue' ? `暂无${queueLabel[queueStatus]}事项` : leftView === 'insights' ? '当前视图没有邮件' : '没有匹配结果'}
                 />
-              )}
-              {leftView === 'recent' && recent.loading && recent.data.length > 0 && (
-                <div className="list-tail-status" role="status">正在加载更多邮件…</div>
-              )}
-              {leftView === 'recent' && !recent.loading && recent.data.length > 0 && !hasMore && (
-                <div className="list-tail-status">已加载全部可见邮件</div>
               )}
             </div>
             <button className="mail-list-float-button" type="button" onClick={scrollMailListToTop} aria-label="回到邮件列表顶部">
