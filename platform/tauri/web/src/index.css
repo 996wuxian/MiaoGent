@@ -2022,6 +2022,33 @@ select:focus-visible,
   background: linear-gradient(135deg, rgb(22 119 255 / 0.07), rgb(14 165 233 / 0.04));
 }
 
+.settings-update-section {
+  border: 1px solid rgb(14 165 233 / 0.2);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgb(14 165 233 / 0.06);
+}
+
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settings-inline-status {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settings-help {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .storage-location-card {
   display: grid;
   gap: 10px;

@@ -67,6 +67,14 @@ export type DataDirectoryMigrationReport = {
   skippedFiles: string[];
 };
 
+export type DesktopUpdateInfo = {
+  available: boolean;
+  version: string | null;
+  currentVersion: string | null;
+  date: string | null;
+  body: string | null;
+};
+
 export function desktopConfigChecks(config: DesktopConfigView) {
   return [
     { key: 'mailAddress', label: 'QQ 邮箱地址', done: Boolean(config.mailAddress.trim()) },
@@ -193,6 +201,40 @@ export async function setAutostartEnabled(enabled: boolean) {
 
 export async function openDevtools(password: string) {
   return invokeDesktop<void>('open_devtools', { password });
+}
+
+export async function checkDesktopUpdate(): Promise<DesktopUpdateInfo> {
+  if (!isTauriRuntime()) throw new Error('应用更新只能在 Tauri 应用中使用');
+  const { check } = await import('@tauri-apps/plugin-updater');
+  const update = await check();
+  if (!update) {
+    return {
+      available: false,
+      version: null,
+      currentVersion: null,
+      date: null,
+      body: null,
+    };
+  }
+  return {
+    available: true,
+    version: update.version,
+    currentVersion: update.currentVersion,
+    date: update.date ?? null,
+    body: update.body ?? null,
+  };
+}
+
+export async function installDesktopUpdate() {
+  if (!isTauriRuntime()) throw new Error('应用更新只能在 Tauri 应用中使用');
+  const [{ check }, { relaunch }] = await Promise.all([
+    import('@tauri-apps/plugin-updater'),
+    import('@tauri-apps/plugin-process'),
+  ]);
+  const update = await check();
+  if (!update) throw new Error('当前没有可安装的新版本。');
+  await update.downloadAndInstall();
+  await relaunch();
 }
 
 async function consumePendingNavigation(

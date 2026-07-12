@@ -1,6 +1,6 @@
 {
   "name": "miaogent-renderer",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
     "@iconify-icons/solar": "^1.2.3",
     "@iconify/react": "^5.0.0",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@vitejs/plugin-react": "^4.3.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

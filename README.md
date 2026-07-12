@@ -30,6 +30,7 @@ The core rule is simple: **MiaoGent can help you read, classify and draft, but i
 - **Draft generation** for emails that need a response.
 - **Human-in-the-loop sending**: drafts must be reviewed and confirmed manually.
 - **Bundled React workbench** with mail list, reader, actions, drafts and activity log.
+- **Manual in-app update check** through signed GitHub Release artifacts.
 - **SQLite local state** for metadata, insights, drafts and operation logs.
 - **Local-only backend** bound to `127.0.0.1`.
 
@@ -140,6 +141,7 @@ Notes:
 
 - The installer is not code-signed by default.
 - Windows may show a security warning for unsigned builds.
+- Updater artifacts require `TAURI_SIGNING_PRIVATE_KEY`. Public releases use a GitHub Actions secret; do not commit the private key.
 - Build outputs are ignored by Git.
 - The generated Python sidecar executable is not committed.
 
@@ -219,6 +221,7 @@ Before publishing your fork, check that none of these files are staged.
 - Rich-text draft editing.
 - Attachment awareness.
 - Evaluation harness for classification and draft quality.
+- Authenticode signing for Windows installers.
 - macOS/Linux desktop packaging.
 
 ## License

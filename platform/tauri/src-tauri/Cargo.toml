@@ -1,6 +1,6 @@
 [package]
 name = "qq-mail-agent-desktop"
-version = "0.1.12"
+version = "0.1.13"
 description = "Desktop shell for MiaoGent"
 authors = ["wuxian"]
 license = ""
@@ -29,6 +29,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 ureq = { version = "2.12.1", default-features = false, features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }

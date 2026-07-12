@@ -21,6 +21,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       PYTHONUTF8: "1"
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -107,6 +109,11 @@ jobs:
           $installer = Get-Item -LiteralPath $result.Path
           $installerOut = Join-Path $artifactDir $installer.Name
           Copy-Item -LiteralPath $installer.FullName -Destination $installerOut -Force
+          if (-not $result.SignaturePath -or -not (Test-Path -LiteralPath $result.SignaturePath)) {
+            throw "Updater signature artifact is missing. Check TAURI_SIGNING_PRIVATE_KEY."
+          }
+          $signatureOut = Join-Path $artifactDir "$($installer.Name).sig"
+          Copy-Item -LiteralPath $result.SignaturePath -Destination $signatureOut -Force
 
           $installerHash = if ($result.SHA256) {
             $result.SHA256
@@ -119,10 +126,31 @@ jobs:
           } else {
             ""
           }
+          $signatureHash = if ($result.SignatureSHA256) {
+            $result.SignatureSHA256
+          } else {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $signatureOut).Hash
+          }
+
+          $releaseVersion = "${{ github.ref_name }}"
+          if (-not $releaseVersion -or -not $releaseVersion.StartsWith("v")) {
+            $releaseVersion = "v$((Get-Content -Raw -LiteralPath "platform\tauri\src-tauri\tauri.conf.json" | ConvertFrom-Json).version)"
+          }
+          $latestJson = Join-Path $artifactDir "latest.json"
+          .\scripts\generate-updater-json.ps1 `
+            -Version $releaseVersion `
+            -InstallerPath $installerOut `
+            -SignaturePath $signatureOut `
+            -Repository "996wuxian/MiaoGent" `
+            -OutputPath $latestJson `
+            -Notes "MiaoGent $releaseVersion desktop update." | Out-Null
+          $latestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $latestJson).Hash
 
           $shaFile = Join-Path $artifactDir "SHA256SUMS.txt"
           $shaLines = @(
-            "$installerHash  $($installer.Name)"
+            "$installerHash  $($installer.Name)",
+            "$signatureHash  $($installer.Name).sig",
+            "$latestHash  latest.json"
           )
           if ($sidecarHash) {
             $shaLines += "$sidecarHash  qq-mail-agent-worker.exe"
@@ -134,6 +162,10 @@ jobs:
             installer = $installer.Name
             installer_sha256 = $installerHash
             installer_bytes = $installer.Length
+            updater_signature = "$($installer.Name).sig"
+            updater_signature_sha256 = $signatureHash
+            updater_metadata = "latest.json"
+            updater_metadata_sha256 = $latestHash
             sidecar_sha256 = $sidecarHash
             target_triple = $result.TargetTriple
             cargo_target_dir = $result.CargoTargetDir
@@ -143,6 +175,8 @@ jobs:
           } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $metadataFile -Encoding utf8
 
           "installer_path=$installerOut" >> $env:GITHUB_OUTPUT
+          "signature_path=$signatureOut" >> $env:GITHUB_OUTPUT
+          "latest_json_path=$latestJson" >> $env:GITHUB_OUTPUT
           "sha256_path=$shaFile" >> $env:GITHUB_OUTPUT
           "metadata_path=$metadataFile" >> $env:GITHUB_OUTPUT
           "installer_name=$($installer.Name)" >> $env:GITHUB_OUTPUT

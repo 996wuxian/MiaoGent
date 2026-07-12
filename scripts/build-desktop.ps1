@@ -58,6 +58,23 @@ if ($bundleOverride.PSObject.Properties.Name -contains "build") {
     }
 }
 
+$createsUpdaterArtifacts = $false
+if (
+    $tauriConfigJson.bundle -and
+    ($tauriConfigJson.bundle.PSObject.Properties.Name -contains "createUpdaterArtifacts")
+) {
+    $createsUpdaterArtifacts = [bool]$tauriConfigJson.bundle.createUpdaterArtifacts
+}
+if ($createsUpdaterArtifacts -and -not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    $defaultSigningKey = Join-Path (Join-Path $env:USERPROFILE ".tauri") "miaogent.key"
+    if (Test-Path -LiteralPath $defaultSigningKey) {
+        $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw -LiteralPath $defaultSigningKey
+    }
+    else {
+        throw "Updater artifacts are enabled but TAURI_SIGNING_PRIVATE_KEY is not set. Generate a key with 'npm run tauri -- signer generate --ci --write-keys `$env:USERPROFILE\.tauri\miaogent.key' or configure the GitHub Actions secret."
+    }
+}
+
 $hostLine = rustc -vV | Where-Object { $_ -like "host:*" } | Select-Object -First 1
 if (-not $hostLine) {
     throw "Unable to determine the Rust host target triple."
@@ -130,11 +147,21 @@ if (-not $nsisScript -or -not (Select-String -LiteralPath $nsisScript.FullName -
     throw "NSIS input does not include qq-mail-agent-worker.exe."
 }
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName
+$signaturePath = "$($installer.FullName).sig"
+$signatureHash = ""
+if ($createsUpdaterArtifacts) {
+    if (-not (Test-Path -LiteralPath $signaturePath)) {
+        throw "Updater signature was not produced: $signaturePath"
+    }
+    $signatureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $signaturePath).Hash
+}
 
 [pscustomobject]@{
     Path = $installer.FullName
     Bytes = $installer.Length
     SHA256 = $hash.Hash
+    SignaturePath = if ($createsUpdaterArtifacts) { $signaturePath } else { "" }
+    SignatureSHA256 = $signatureHash
     SidecarPath = $releaseSidecar
     SidecarSHA256 = $releaseSidecarHash.Hash
     CargoTargetDir = $cargoTargetDir

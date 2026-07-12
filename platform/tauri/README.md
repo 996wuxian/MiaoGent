@@ -32,6 +32,8 @@ The installer bundles:
 - the Tauri desktop executable;
 - the React frontend assets;
 - the PyInstaller sidecar `qq-mail-agent-worker.exe`.
+- signed updater metadata for application-driven upgrades after the first
+  updater-capable install.
 
 At runtime the Tauri process starts the sidecar automatically. The sidecar
 starts FastAPI on a random `127.0.0.1` port and receives a random session token
@@ -44,6 +46,30 @@ User secrets must remain outside the release artifact:
 - QQ mail authorization code and DeepSeek API key are stored in Windows
   Credential Manager.
 - `.env`, SQLite state, logs, WebView cache and mail exports are not packaged.
+
+## In-app updates
+
+MiaoGent uses the official Tauri updater with signed GitHub Release artifacts.
+The app checks:
+
+```text
+https://github.com/996wuxian/MiaoGent/releases/latest/download/latest.json
+```
+
+Release assets for Windows should include:
+
+- `MiaoGent_<version>_x64-setup.exe`;
+- `MiaoGent_<version>_x64-setup.exe.sig`;
+- `latest.json`;
+- `SHA256SUMS.txt`;
+- `build-metadata.json`.
+
+The updater signing public key is stored in `src-tauri/tauri.conf.json`. The
+private key must be kept outside the repository and provided through
+`TAURI_SIGNING_PRIVATE_KEY` in GitHub Actions or a local environment variable.
+
+`v0.1.13` is the first updater-capable release. Earlier versions cannot update
+themselves in-app and must be manually upgraded once.
 
 ## Local storage
 

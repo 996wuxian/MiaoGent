@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   chooseStorageDirectory,
+  checkDesktopUpdate,
   clearDesktopUserData,
   desktopConfigChecks,
   getDesktopStorageLocations,
   getAutostartStatus,
   getDesktopConfig,
+  installDesktopUpdate,
   migrateDesktopDataDirectory,
   openStorageDirectory,
   resetDesktopDataDirectory,
@@ -14,6 +16,7 @@ import {
   setAutostartEnabled,
   setWebviewDataDirectory,
   type DesktopConfigView,
+  type DesktopUpdateInfo,
   type StorageLocations,
   type UserDataCleanupReport,
 } from '../desktop/desktopBridge';
@@ -98,6 +101,10 @@ export function DesktopSettings({
   const [dataMigrationConfirmOpen, setDataMigrationConfirmOpen] = useState(false);
   const [dataResetConfirmOpen, setDataResetConfirmOpen] = useState(false);
   const [autostartSaving, setAutostartSaving] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState('');
+  const [availableUpdate, setAvailableUpdate] = useState<DesktopUpdateInfo | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -176,6 +183,41 @@ export function DesktopSettings({
       setError(errorMessage(autostartError));
     } finally {
       setAutostartSaving(false);
+    }
+  }
+
+  async function checkForUpdate() {
+    if (updateChecking || updateInstalling) return;
+    setUpdateChecking(true);
+    setError('');
+    setUpdateStatus('');
+    setAvailableUpdate(null);
+    try {
+      const update = await checkDesktopUpdate();
+      if (!update.available) {
+        setUpdateStatus('当前已经是最新版本。');
+        return;
+      }
+      setAvailableUpdate(update);
+    } catch (updateError) {
+      setError(`检查更新失败：${errorMessage(updateError)}`);
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function confirmInstallUpdate() {
+    if (updateInstalling) return;
+    setUpdateInstalling(true);
+    setError('');
+    setUpdateStatus('正在下载并安装更新…');
+    try {
+      await installDesktopUpdate();
+    } catch (updateError) {
+      setError(`安装更新失败：${errorMessage(updateError)}`);
+      setUpdateStatus('');
+      setUpdateInstalling(false);
+      setAvailableUpdate(null);
     }
   }
 
@@ -462,6 +504,30 @@ export function DesktopSettings({
               </label>
             </section>
 
+            <section className="settings-section settings-update-section">
+              <div className="section-heading">
+                <div>
+                  <h3>应用更新</h3>
+                  <p>从 GitHub Release 检查新版本；发现更新后会先确认，再下载安装并重启。</p>
+                </div>
+                <Badge tone="info">手动检查</Badge>
+              </div>
+              <div className="settings-inline-actions">
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  disabled={updateChecking || updateInstalling}
+                  onClick={() => void checkForUpdate()}
+                >
+                  {updateChecking ? '检查中…' : updateInstalling ? '安装中…' : '检查更新'}
+                </button>
+                {updateStatus && <span className="settings-inline-status">{updateStatus}</span>}
+              </div>
+              <p className="settings-help">
+                0.1.12 及更早版本没有内置更新器，需要手动安装一次新版；之后才能应用内更新。
+              </p>
+            </section>
+
             <section className="settings-section settings-storage-section">
               <div className="section-heading">
                 <div>
@@ -651,6 +717,27 @@ export function DesktopSettings({
           </form>
         </aside>
       </div>
+      <ConfirmDialog
+        state={availableUpdate ? {
+          title: '发现新版本',
+          message: `发现 MiaoGent ${availableUpdate.version ?? ''}，是否下载并安装？安装完成后应用会自动重启。`,
+          confirmLabel: updateInstalling ? '安装中…' : '下载并安装',
+          tone: 'warning',
+          details: (
+            <div className="cleanup-confirm-detail">
+              {availableUpdate.currentVersion && <p>当前版本：{availableUpdate.currentVersion}</p>}
+              {availableUpdate.version && <p>新版本：{availableUpdate.version}</p>}
+              {availableUpdate.body && <p>{availableUpdate.body}</p>}
+            </div>
+          ),
+        } : null}
+        onCancel={() => {
+          if (updateInstalling) return;
+          setAvailableUpdate(null);
+          setUpdateStatus('已取消安装更新。');
+        }}
+        onConfirm={() => void confirmInstallUpdate()}
+      />
       <ConfirmDialog
         state={clearConfirmOpen ? {
           title: '清除 MiaoGent 本机数据',

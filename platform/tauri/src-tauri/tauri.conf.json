@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "MiaoGent",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "identifier": "com.wuxian.qqmailagent",
   "build": {
     "frontendDist": "../web/dist",
@@ -18,6 +18,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh"
@@ -32,6 +33,17 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgwQjBGNDk5MTlCRDFFRDgKUldUWUhyMFptZlN3Z0cyenNCeFZZaGNGZS83akV5RjIyNFpMYk0vS3lDeGpPWUExcnVGTmtBRkUK",
+      "endpoints": [
+        "https://github.com/996wuxian/MiaoGent/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,8 @@ const desktopMocks = vi.hoisted(() => ({
   getDesktopConfig: vi.fn(),
   saveDesktopConfig: vi.fn(),
   clearDesktopUserData: vi.fn(),
+  checkDesktopUpdate: vi.fn(),
+  installDesktopUpdate: vi.fn(),
   getDesktopStorageLocations: vi.fn(),
   chooseStorageDirectory: vi.fn(),
   migrateDesktopDataDirectory: vi.fn(),
@@ -91,6 +93,14 @@ describe('DesktopSettings', () => {
     });
     desktopMocks.resetWebviewDataDirectory.mockReset().mockResolvedValue(storageLocations);
     desktopMocks.openStorageDirectory.mockReset().mockResolvedValue(undefined);
+    desktopMocks.checkDesktopUpdate.mockReset().mockResolvedValue({
+      available: false,
+      version: null,
+      currentVersion: null,
+      date: null,
+      body: null,
+    });
+    desktopMocks.installDesktopUpdate.mockReset().mockResolvedValue(undefined);
     desktopMocks.clearDesktopUserData.mockReset().mockResolvedValue({
       removedPaths: ['C:\\Users\\kata\\AppData\\Roaming\\com.wuxian.qqmailagent'],
       missingPaths: [],
@@ -215,5 +225,38 @@ describe('DesktopSettings', () => {
     await user.click(screen.getByRole('button', { name: '保存缓存位置' }));
 
     await waitFor(() => expect(desktopMocks.setWebviewDataDirectory).toHaveBeenCalledWith('D:\\MailAgent'));
+  });
+
+  it('checks for desktop updates and reports when the app is current', async () => {
+    const user = userEvent.setup();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+
+    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+
+    await waitFor(() => expect(desktopMocks.checkDesktopUpdate).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('当前已经是最新版本。')).toBeInTheDocument();
+  });
+
+  it('requires confirmation before installing a desktop update', async () => {
+    desktopMocks.checkDesktopUpdate.mockResolvedValue({
+      available: true,
+      version: '0.1.14',
+      currentVersion: '0.1.13',
+      date: '2026-07-12T00:00:00Z',
+      body: '更新日志',
+    });
+    const user = userEvent.setup();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+
+    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '发现新版本' });
+    expect(within(dialog).getByText('当前版本：0.1.13')).toBeInTheDocument();
+    expect(within(dialog).getByText('新版本：0.1.14')).toBeInTheDocument();
+    expect(desktopMocks.installDesktopUpdate).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: '下载并安装' }));
+
+    await waitFor(() => expect(desktopMocks.installDesktopUpdate).toHaveBeenCalledTimes(1));
   });
 });
