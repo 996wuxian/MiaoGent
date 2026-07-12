@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "MiaoGent",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "identifier": "com.wuxian.qqmailagent",
   "build": {
     "frontendDist": "../web/dist",
@@ -21,7 +21,9 @@
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/installer-hooks.nsh"
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "icon": [
