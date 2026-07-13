@@ -170,6 +170,18 @@ function updateErrorMessage(error: unknown) {
   return `无法连接 GitHub 更新源。请检查网络、代理/VPN 是否对桌面应用生效，或稍后重试。原始错误：${message}`;
 }
 
+function formatCheckedAt(value: string | null | undefined) {
+  if (!value) return '未知时间';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export function DesktopSettings({
   open,
   onClose,
@@ -208,7 +220,9 @@ export function DesktopSettings({
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateStatus, setUpdateStatus] = useState('');
+  const [updateFailure, setUpdateFailure] = useState('');
   const [availableUpdate, setAvailableUpdate] = useState<DesktopUpdateInfo | null>(null);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -238,6 +252,11 @@ export function DesktopSettings({
       disposed = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || mode === 'onboarding') return;
+    void checkForUpdate();
+  }, [open, mode]);
 
   if (!open) return null;
   const checks = config ? desktopConfigChecks(config) : [];
@@ -341,16 +360,28 @@ export function DesktopSettings({
     setUpdateChecking(true);
     setError('');
     setUpdateStatus('');
+    setUpdateFailure('');
     setAvailableUpdate(null);
+    setUpdateConfirmOpen(false);
     try {
       const update = await checkDesktopUpdate();
+      if (update.source === 'cache' && update.error) {
+        setUpdateFailure('暂时无法连接 GitHub 更新源，已显示上次成功检查结果。');
+      }
       if (!update.available) {
-        setUpdateStatus('当前已经是最新版本。');
+        setUpdateStatus(update.source === 'cache'
+          ? `当前已是最新版本（上次成功检查：${formatCheckedAt(update.checkedAt)}）。`
+          : '当前已是最新版本。');
         return;
       }
       setAvailableUpdate(update);
+      setUpdateStatus(update.source === 'cache'
+        ? `有新的版本 v${update.version}（上次成功检查：${formatCheckedAt(update.checkedAt)}）。`
+        : `有新的版本 v${update.version}。`);
     } catch (updateError) {
-      notifyUpdateError(`检查更新失败：${updateErrorMessage(updateError)}`);
+      const message = `检查更新失败：${updateErrorMessage(updateError)}`;
+      setUpdateFailure('暂时无法连接 GitHub 更新源。你可以稍后重新打开设置页，或去官网下载最新版本。');
+      notifyUpdateError(message);
     } finally {
       setUpdateChecking(false);
     }
@@ -362,6 +393,7 @@ export function DesktopSettings({
     setError('');
     setUpdateStatus('安装中，稍后将自动进入安装状态…');
     setAvailableUpdate(null);
+    setUpdateConfirmOpen(false);
     try {
       await installDesktopUpdate();
     } catch (updateError) {
@@ -369,6 +401,7 @@ export function DesktopSettings({
       setUpdateStatus('');
       setUpdateInstalling(false);
       setAvailableUpdate(null);
+      setUpdateConfirmOpen(false);
     }
   }
 
@@ -697,21 +730,27 @@ export function DesktopSettings({
               <div className="section-heading">
                 <div>
                   <h3>应用更新</h3>
-                  <p>从 GitHub Release 检查新版本；发现更新后会先确认，再下载安装并重启。</p>
+                  <p>打开设置时自动从 GitHub Release 检查新版本；发现更新后会先确认，再下载安装并重启。</p>
                 </div>
                 <Badge tone="info">{appVersion ? `当前版本 v${appVersion}` : '当前版本读取中'}</Badge>
               </div>
+              <LoadingLine active={updateChecking} />
               <div className="settings-inline-actions">
-                <button
-                  className="btn btn-secondary"
-                  type="button"
-                  disabled={updateChecking || updateInstalling}
-                  onClick={() => void checkForUpdate()}
-                >
-                  {updateChecking ? '检查中…' : updateInstalling ? '安装中…' : '检查更新'}
-                </button>
-                {updateStatus && <span className="settings-inline-status">{updateStatus}</span>}
+                <span className="settings-inline-status">
+                  {updateChecking ? '正在检查更新…' : updateStatus || '等待检查更新…'}
+                </span>
+                {availableUpdate && !updateInstalling && (
+                  <button className="btn btn-primary" type="button" onClick={() => setUpdateConfirmOpen(true)}>
+                    现在安装
+                  </button>
+                )}
+                {updateFailure && onOpenReleasePage && (
+                  <button className="btn btn-secondary" type="button" onClick={onOpenReleasePage}>
+                    去官网下载
+                  </button>
+                )}
               </div>
+              {updateFailure && <p className="settings-help">{updateFailure}</p>}
               <p className="settings-help">
                 0.1.12 及更早版本没有内置更新器，需要手动安装一次新版；之后才能应用内更新。
               </p>
@@ -907,7 +946,7 @@ export function DesktopSettings({
         </aside>
       </div>
       <ConfirmDialog
-        state={availableUpdate ? {
+        state={availableUpdate && updateConfirmOpen ? {
           title: '新版本准备就绪',
           message: `发现 MiaoGent ${availableUpdate.version ?? ''}，是否现在安装？安装前会先暂停后台 Agent，安装完成后应用会自动重启。`,
           confirmLabel: updateInstalling ? '安装中…' : '现在安装',
@@ -922,7 +961,7 @@ export function DesktopSettings({
         } : null}
         onCancel={() => {
           if (updateInstalling) return;
-          setAvailableUpdate(null);
+          setUpdateConfirmOpen(false);
           setUpdateStatus('已取消安装更新。');
         }}
         onConfirm={() => void confirmInstallUpdate()}

@@ -89,6 +89,24 @@ export type DesktopUpdateInfo = {
   currentVersion: string | null;
   date: string | null;
   body: string | null;
+  releaseUrl?: string | null;
+  checkedAt?: string | null;
+  source?: 'github' | 'tauri' | 'cache';
+  error?: string | null;
+};
+
+const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/996wuxian/MiaoGent/releases/latest';
+const GITHUB_LATEST_RELEASE_PAGE = 'https://github.com/996wuxian/MiaoGent/releases/latest';
+const UPDATE_CACHE_KEY = 'miaogent:last-successful-update-check';
+
+type GitHubReleaseResponse = {
+  tag_name?: string;
+  name?: string | null;
+  body?: string | null;
+  published_at?: string | null;
+  html_url?: string | null;
+  draft?: boolean;
+  prerelease?: boolean;
 };
 
 export function desktopConfigChecks(config: DesktopConfigView) {
@@ -238,24 +256,147 @@ export async function restartDesktopBackend() {
 
 export async function checkDesktopUpdate(): Promise<DesktopUpdateInfo> {
   if (!isTauriRuntime()) throw new Error('应用更新只能在 Tauri 应用中使用');
+  const currentVersion = await getDesktopAppVersion().catch(() => null);
+  try {
+    const update = await checkGitHubLatestRelease(currentVersion);
+    writeUpdateCache(update);
+    return update;
+  } catch (githubError) {
+    try {
+      const update = await checkTauriUpdater(currentVersion);
+      writeUpdateCache(update);
+      return update;
+    } catch (tauriError) {
+      const cached = readUpdateCache(currentVersion);
+      if (cached) {
+        return {
+          ...cached,
+          source: 'cache',
+          error: `GitHub API: ${errorMessage(githubError)}；Tauri updater: ${errorMessage(tauriError)}`,
+        };
+      }
+      throw new Error(`GitHub API: ${errorMessage(githubError)}；Tauri updater: ${errorMessage(tauriError)}`);
+    }
+  }
+}
+
+async function checkGitHubLatestRelease(currentVersion: string | null): Promise<DesktopUpdateInfo> {
+  const response = await fetch(GITHUB_LATEST_RELEASE_API, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub Releases API 返回 ${response.status}`);
+  }
+  const release = (await response.json()) as GitHubReleaseResponse;
+  const latestVersion = normalizeVersion(release.tag_name || release.name || '');
+  if (!latestVersion) throw new Error('GitHub Release 没有可识别的版本号');
+  return {
+    available: isNewerVersion(latestVersion, currentVersion),
+    version: latestVersion,
+    currentVersion,
+    date: release.published_at ?? null,
+    body: release.body ?? null,
+    releaseUrl: release.html_url ?? GITHUB_LATEST_RELEASE_PAGE,
+    checkedAt: new Date().toISOString(),
+    source: 'github',
+    error: null,
+  };
+}
+
+async function checkTauriUpdater(currentVersion: string | null): Promise<DesktopUpdateInfo> {
   const { check } = await import('@tauri-apps/plugin-updater');
   const update = await check();
   if (!update) {
     return {
       available: false,
       version: null,
-      currentVersion: null,
+      currentVersion,
       date: null,
       body: null,
+      releaseUrl: GITHUB_LATEST_RELEASE_PAGE,
+      checkedAt: new Date().toISOString(),
+      source: 'tauri',
+      error: null,
     };
   }
   return {
     available: true,
-    version: update.version,
-    currentVersion: update.currentVersion,
+    version: normalizeVersion(update.version),
+    currentVersion: update.currentVersion ?? currentVersion,
     date: update.date ?? null,
     body: update.body ?? null,
+    releaseUrl: GITHUB_LATEST_RELEASE_PAGE,
+    checkedAt: new Date().toISOString(),
+    source: 'tauri',
+    error: null,
   };
+}
+
+function normalizeVersion(value: string | null | undefined) {
+  return String(value ?? '').trim().replace(/^v/i, '');
+}
+
+function isNewerVersion(latestVersion: string, currentVersion: string | null) {
+  if (!currentVersion) return true;
+  const latest = parseVersionParts(latestVersion);
+  const current = parseVersionParts(currentVersion);
+  if (!latest || !current) return normalizeVersion(latestVersion) !== normalizeVersion(currentVersion);
+  const length = Math.max(latest.length, current.length);
+  for (let index = 0; index < length; index += 1) {
+    const left = latest[index] ?? 0;
+    const right = current[index] ?? 0;
+    if (left > right) return true;
+    if (left < right) return false;
+  }
+  return false;
+}
+
+function parseVersionParts(value: string | null | undefined) {
+  const normalized = normalizeVersion(value).split(/[+-]/)[0];
+  if (!/^\d+(\.\d+)*$/.test(normalized)) return null;
+  return normalized.split('.').map((part) => Number(part));
+}
+
+function writeUpdateCache(update: DesktopUpdateInfo) {
+  if (update.source === 'cache') return;
+  try {
+    window.localStorage.setItem(UPDATE_CACHE_KEY, JSON.stringify(update));
+  } catch {
+    // Cache is best-effort only; update installation still relies on signed Tauri updater metadata.
+  }
+}
+
+function readUpdateCache(currentVersion: string | null): DesktopUpdateInfo | null {
+  try {
+    const raw = window.localStorage.getItem(UPDATE_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as DesktopUpdateInfo;
+    if (!cached || typeof cached !== 'object') return null;
+    const version = typeof cached.version === 'string' ? normalizeVersion(cached.version) : null;
+    if (!version) return null;
+    return {
+      available: isNewerVersion(version, currentVersion ?? cached.currentVersion),
+      version,
+      currentVersion: currentVersion ?? cached.currentVersion ?? null,
+      date: typeof cached.date === 'string' ? cached.date : null,
+      body: typeof cached.body === 'string' ? cached.body : null,
+      releaseUrl: typeof cached.releaseUrl === 'string' ? cached.releaseUrl : GITHUB_LATEST_RELEASE_PAGE,
+      checkedAt: typeof cached.checkedAt === 'string' ? cached.checkedAt : null,
+      source: 'cache',
+      error: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function installDesktopUpdate() {

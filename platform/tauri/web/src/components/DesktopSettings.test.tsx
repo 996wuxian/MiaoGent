@@ -288,14 +288,13 @@ describe('DesktopSettings', () => {
   });
 
   it('checks for desktop updates and reports when the app is current', async () => {
-    const user = userEvent.setup();
     render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
 
     expect(await screen.findByText('当前版本 v0.1.20')).toBeInTheDocument();
-    await user.click(await screen.findByRole('button', { name: '检查更新' }));
 
     await waitFor(() => expect(desktopMocks.checkDesktopUpdate).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('当前已经是最新版本。')).toBeInTheDocument();
+    expect(screen.getByText('当前已是最新版本。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument();
   });
 
   it('explains GitHub updater network failures in Chinese', async () => {
@@ -315,8 +314,6 @@ describe('DesktopSettings', () => {
       />,
     );
 
-    await user.click(await screen.findByRole('button', { name: '检查更新' }));
-
     await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
     expect(onNotify).toHaveBeenCalledWith(
       'error',
@@ -326,7 +323,38 @@ describe('DesktopSettings', () => {
     expect(onNotify.mock.calls[0][1]).toContain('原始错误：error sending request for url');
     onNotify.mock.calls[0][2].onAction();
     expect(onOpenReleasePage).toHaveBeenCalledTimes(1);
+    await user.click(await screen.findByRole('button', { name: '去官网下载' }));
+    expect(onOpenReleasePage).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('暂时无法连接 GitHub 更新源。你可以稍后重新打开设置页，或去官网下载最新版本。')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows cached update check results when GitHub is temporarily unreachable', async () => {
+    desktopMocks.checkDesktopUpdate.mockResolvedValue({
+      available: true,
+      version: '0.1.28',
+      currentVersion: '0.1.27',
+      date: '2026-07-13T12:00:00Z',
+      body: null,
+      source: 'cache',
+      checkedAt: '2026-07-13T11:30:00Z',
+      error: 'GitHub API: network failed',
+    });
+    const onOpenReleasePage = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DesktopSettings
+        open
+        onClose={() => undefined}
+        onSaved={() => undefined}
+        onOpenReleasePage={onOpenReleasePage}
+      />,
+    );
+
+    expect(await screen.findByText(/有新的版本 v0.1.28/)).toBeInTheDocument();
+    expect(screen.getByText('暂时无法连接 GitHub 更新源，已显示上次成功检查结果。')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '去官网下载' }));
+    expect(onOpenReleasePage).toHaveBeenCalledTimes(1);
   });
 
   it('requires confirmation before installing a desktop update and then closes the prompt', async () => {
@@ -340,7 +368,9 @@ describe('DesktopSettings', () => {
     const user = userEvent.setup();
     render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
 
-    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+    expect(await screen.findByText('有新的版本 v0.1.14。')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '新版本准备就绪' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: '现在安装' }));
 
     const dialog = await screen.findByRole('dialog', { name: '新版本准备就绪' });
     expect(within(dialog).getByText('当前版本：0.1.13')).toBeInTheDocument();
@@ -376,8 +406,10 @@ describe('DesktopSettings', () => {
       />,
     );
 
-    await user.click(await screen.findByRole('button', { name: '检查更新' }));
+    expect(await screen.findByText('有新的版本 v0.1.14。')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: '现在安装' }));
+    const dialog = await screen.findByRole('dialog', { name: '新版本准备就绪' });
+    await user.click(within(dialog).getByRole('button', { name: '现在安装' }));
 
     await waitFor(() => expect(onNotify).toHaveBeenCalledTimes(1));
     expect(onNotify).toHaveBeenCalledWith(
