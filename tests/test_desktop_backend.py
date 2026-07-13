@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from qq_mail_agent_cli.agent import MailAgent
-from qq_mail_agent_cli.config import MailConfig
+from qq_mail_agent_cli.config import MailConfig, load_mail_config
 from qq_mail_agent_cli.desktop_events import JsonLineEventSink, RecordingEventSink
 from qq_mail_agent_cli.desktop_worker import (
     _process_exists,
@@ -83,6 +83,87 @@ def _result(
         confidence=0.91,
         priority_reason="涉及明确截止时间" if importance != MailImportance.GENERAL else "普通信息",
     )
+
+
+def test_load_mail_config_prefers_163_env_when_163_credentials_exist(tmp_path, monkeypatch):
+    for key in [
+        "MAIL_PROVIDER",
+        "MAIL_ADDRESS",
+        "MAIL_AUTH_CODE",
+        "MAIL_IMAP_HOST",
+        "MAIL_IMAP_PORT",
+        "MAIL_SMTP_HOST",
+        "MAIL_SMTP_PORT",
+        "QQ_MAIL_PROVIDER",
+        "QQ_MAIL_ADDRESS",
+        "QQ_MAIL_AUTH_CODE",
+        "QQ_MAIL_IMAP_HOST",
+        "QQ_MAIL_IMAP_PORT",
+        "QQ_MAIL_SMTP_HOST",
+        "QQ_MAIL_SMTP_PORT",
+        "163_MAIL_ADDRESS",
+        "163_MAIL_AUTH_CODE",
+        "163_MAIL_IMAP_HOST",
+        "163_MAIL_IMAP_PORT",
+        "163_MAIL_SMTP_HOST",
+        "163_MAIL_SMTP_PORT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "QQ_MAIL_ADDRESS=old@qq.com",
+                "QQ_MAIL_AUTH_CODE=qq-secret",
+                "163_MAIL_ADDRESS=you@163.com",
+                "163_MAIL_AUTH_CODE=netease-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    config = load_mail_config()
+
+    assert config.provider == "netease_163"
+    assert config.address == "you@163.com"
+    assert config.auth_code == "netease-secret"
+    assert config.imap_host == "imap.163.com"
+    assert config.smtp_host == "smtp.163.com"
+
+
+def test_mail_client_sends_imap_id_for_163(monkeypatch):
+    instances = []
+
+    class FakeImap:
+        def __init__(self, host, port, *, timeout):
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+            self.commands = []
+            instances.append(self)
+
+        def login(self, address, auth_code):
+            self.commands.append(("LOGIN", address, auth_code))
+            return "OK", []
+
+        def _simple_command(self, command, payload):
+            self.commands.append((command, payload))
+            return "OK", []
+
+    monkeypatch.setattr("imaplib.IMAP4_SSL", FakeImap)
+    config = MailConfig(
+        "you@163.com",
+        "imap.163.com",
+        993,
+        "smtp.163.com",
+        465,
+        "secret",
+    )
+
+    connection = MailClient(config)._connect_imap()
+
+    assert connection is instances[0]
+    assert ("ID", '("name" "MiaoGent" "version" "1.0" "vendor" "MiaoGent")') in connection.commands
 
 
 def test_agent_parses_orthogonal_insight_and_treats_mail_as_untrusted_data():
@@ -1187,7 +1268,7 @@ def test_desktop_token_is_environment_only_and_never_an_argv_option(tmp_path, mo
 
 def test_startup_failure_summary_reports_missing_desktop_config_without_secrets():
     payload = _startup_failure_payload(
-        RuntimeError("Missing required mail config: QQ_MAIL_ADDRESS, QQ_MAIL_AUTH_CODE")
+        RuntimeError("Missing required mail config: mail address, mail authorization code")
     )
 
     assert payload["has_more"] is False
@@ -1195,8 +1276,8 @@ def test_startup_failure_summary_reports_missing_desktop_config_without_secrets(
     assert failure["uid"] == "mailbox"
     assert failure["stage"] == "configuration"
     assert "桌面 Agent 设置" in failure["error"]
-    assert "QQ_MAIL_ADDRESS" in failure["error"]
-    assert "QQ_MAIL_AUTH_CODE" in failure["error"]
+    assert "邮箱地址" in failure["error"]
+    assert "客户端授权码" in failure["error"]
     assert "启动同步暂时失败" not in failure["error"]
     assert "secret" not in json.dumps(payload, ensure_ascii=False).lower()
 

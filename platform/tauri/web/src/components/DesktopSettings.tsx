@@ -16,16 +16,20 @@ import {
   saveDesktopConfig,
   setAutostartEnabled,
   setWebviewDataDirectory,
+  mailProviderAuthCodeLabel,
+  mailProviderLabel,
   type DesktopConfigView,
   type DesktopUpdateInfo,
+  type MailProvider,
   type StorageLocations,
   type UserDataCleanupReport,
 } from '../desktop/desktopBridge';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { ConfirmDialog } from './Dialogs';
-import { Badge, IconButton, InlineError, LoadingLine } from './ui';
+import { Badge, IconButton, InlineError, LoadingLine, SegmentedTabs } from './ui';
 
 type FormState = {
+  mailProvider: MailProvider;
   mailAddress: string;
   mailAuthCode: string;
   imapHost: string;
@@ -48,7 +52,10 @@ type SettingsNotifyOptions = {
   onAction?: () => void;
 };
 
+type ProviderDraft = Pick<FormState, 'mailAddress' | 'mailAuthCode'>;
+
 const emptyForm: FormState = {
+  mailProvider: 'qq',
   mailAddress: '',
   mailAuthCode: '',
   imapHost: 'imap.qq.com',
@@ -63,9 +70,30 @@ const emptyForm: FormState = {
   clearDeepseekApiKey: false,
 };
 
+const providerDefaults: Record<MailProvider, Pick<FormState, 'imapHost' | 'imapPort' | 'smtpHost' | 'smtpPort'>> = {
+  qq: {
+    imapHost: 'imap.qq.com',
+    imapPort: '993',
+    smtpHost: 'smtp.qq.com',
+    smtpPort: '465',
+  },
+  netease_163: {
+    imapHost: 'imap.163.com',
+    imapPort: '993',
+    smtpHost: 'smtp.163.com',
+    smtpPort: '465',
+  },
+};
+
+const emptyProviderDrafts: Record<MailProvider, ProviderDraft> = {
+  qq: { mailAddress: '', mailAuthCode: '' },
+  netease_163: { mailAddress: '', mailAuthCode: '' },
+};
+
 function formFromConfig(config: DesktopConfigView): FormState {
   return {
     ...emptyForm,
+    mailProvider: config.mailProvider,
     mailAddress: config.mailAddress,
     imapHost: config.imapHost,
     imapPort: String(config.imapPort),
@@ -74,6 +102,47 @@ function formFromConfig(config: DesktopConfigView): FormState {
     deepseekBaseUrl: config.deepseekBaseUrl,
     deepseekModel: config.deepseekModel,
     deepseekTimeoutSeconds: String(config.deepseekTimeoutSeconds),
+  };
+}
+
+function providerDraftsFromConfig(config: DesktopConfigView): Record<MailProvider, ProviderDraft> {
+  return {
+    ...emptyProviderDrafts,
+    [config.mailProvider]: {
+      mailAddress: config.mailAddress,
+      mailAuthCode: '',
+    },
+  };
+}
+
+function normalizeProviderForm(
+  current: FormState,
+  nextProvider: MailProvider,
+  providerDrafts: Record<MailProvider, ProviderDraft>,
+): FormState {
+  const nextDraft = providerDrafts[nextProvider];
+  return {
+    ...current,
+    mailProvider: nextProvider,
+    mailAddress: nextDraft.mailAddress,
+    mailAuthCode: nextDraft.mailAuthCode,
+    clearMailAuthCode: false,
+  };
+}
+
+function saveConnectionFields(form: FormState, savedProvider?: MailProvider) {
+  const nextDefaults = providerDefaults[form.mailProvider];
+  const previousDefaults = savedProvider ? providerDefaults[savedProvider] : nextDefaults;
+  const providerChanged = Boolean(savedProvider && savedProvider !== form.mailProvider);
+  const shouldUseNextImapHost = !form.imapHost.trim() || (providerChanged && form.imapHost === previousDefaults.imapHost);
+  const shouldUseNextImapPort = !form.imapPort.trim() || (providerChanged && form.imapPort === previousDefaults.imapPort);
+  const shouldUseNextSmtpHost = !form.smtpHost.trim() || (providerChanged && form.smtpHost === previousDefaults.smtpHost);
+  const shouldUseNextSmtpPort = !form.smtpPort.trim() || (providerChanged && form.smtpPort === previousDefaults.smtpPort);
+  return {
+    imapHost: shouldUseNextImapHost ? nextDefaults.imapHost : form.imapHost.trim(),
+    imapPort: Number(shouldUseNextImapPort ? nextDefaults.imapPort : form.imapPort),
+    smtpHost: shouldUseNextSmtpHost ? nextDefaults.smtpHost : form.smtpHost.trim(),
+    smtpPort: Number(shouldUseNextSmtpPort ? nextDefaults.smtpPort : form.smtpPort),
   };
 }
 
@@ -119,6 +188,7 @@ export function DesktopSettings({
   const ref = useDialogFocus(open, close);
   const [config, setConfig] = useState<DesktopConfigView | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [providerDrafts, setProviderDrafts] = useState<Record<MailProvider, ProviderDraft>>(emptyProviderDrafts);
   const [autostart, setAutostart] = useState(false);
   const [appVersion, setAppVersion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -148,6 +218,7 @@ export function DesktopSettings({
         if (disposed) return;
         setConfig(nextConfig);
         setForm(formFromConfig(nextConfig));
+        setProviderDrafts(providerDraftsFromConfig(nextConfig));
         setAutostart(startup.enabled);
         setAppVersion(version);
         setStorageLocations(locations);
@@ -169,9 +240,22 @@ export function DesktopSettings({
   const checks = config ? desktopConfigChecks(config) : [];
   const completedChecks = checks.filter((item) => item.done).length;
   const isOnboarding = mode === 'onboarding';
+  const providerChanged = Boolean(config && form.mailProvider !== config.mailProvider);
+  const hasActiveMailAuthCode = Boolean(config?.hasMailAuthCode && !providerChanged);
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      if (key === 'mailAddress' || key === 'mailAuthCode') {
+        setProviderDrafts((drafts) => ({
+          ...drafts,
+          [current.mailProvider]: {
+            ...drafts[current.mailProvider],
+            [key]: String(value),
+          },
+        }));
+      }
+      return { ...current, [key]: value };
+    });
   }
 
   function notifyUpdateError(message: string) {
@@ -188,15 +272,21 @@ export function DesktopSettings({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (saving) return;
+    if (providerChanged && !form.mailAuthCode.trim()) {
+      setError(`切换到${mailProviderLabel(form.mailProvider)}后，请输入新的${mailProviderAuthCodeLabel(form.mailProvider)}。`);
+      return;
+    }
     setSaving(true);
     setError('');
+    const connectionFields = saveConnectionFields(form, config?.mailProvider);
     try {
       const nextConfig = await saveDesktopConfig({
+        mailProvider: form.mailProvider,
         mailAddress: form.mailAddress,
-        imapHost: form.imapHost,
-        imapPort: Number(form.imapPort),
-        smtpHost: form.smtpHost,
-        smtpPort: Number(form.smtpPort),
+        imapHost: connectionFields.imapHost,
+        imapPort: connectionFields.imapPort,
+        smtpHost: connectionFields.smtpHost,
+        smtpPort: connectionFields.smtpPort,
         deepseekBaseUrl: form.deepseekBaseUrl,
         deepseekModel: form.deepseekModel,
         deepseekTimeoutSeconds: Number(form.deepseekTimeoutSeconds),
@@ -207,12 +297,25 @@ export function DesktopSettings({
       });
       setConfig(nextConfig);
       setForm(formFromConfig(nextConfig));
+      setProviderDrafts(providerDraftsFromConfig(nextConfig));
       onSaved();
     } catch (saveError) {
       setError(errorMessage(saveError));
     } finally {
       setSaving(false);
     }
+  }
+
+  function setProvider(nextProvider: MailProvider) {
+    const nextDrafts = {
+      ...providerDrafts,
+      [form.mailProvider]: {
+        mailAddress: form.mailAddress,
+        mailAuthCode: form.mailAuthCode,
+      },
+    };
+    setProviderDrafts(nextDrafts);
+    setForm((current) => normalizeProviderForm(current, nextProvider, nextDrafts));
   }
 
   async function changeAutostart(enabled: boolean) {
@@ -273,6 +376,7 @@ export function DesktopSettings({
       const report = await clearDesktopUserData();
       setConfig(null);
       setForm(emptyForm);
+      setProviderDrafts(emptyProviderDrafts);
       setAutostart(false);
       setClearConfirmOpen(false);
       onCleared?.(report);
@@ -410,7 +514,7 @@ export function DesktopSettings({
               <h2 id="desktop-settings-title">{isOnboarding ? '首次配置 MiaoGent' : '桌面 Agent 设置'}</h2>
               <p>
                 {isOnboarding
-                  ? '完成 QQ 邮箱、授权码和 DeepSeek 配置后，MiaoGent 才能静默巡检、判断重要邮件并准备草稿。'
+                  ? '完成邮箱平台、地址、授权码和 DeepSeek 配置后，MiaoGent 才能静默巡检、判断重要邮件并准备草稿。'
                   : '授权码和 API Key 只写入 Windows 凭据管理器，不会写入 SQLite、日志或普通配置文件。'}
               </p>
             </div>
@@ -433,8 +537,8 @@ export function DesktopSettings({
                 </div>
                 <div className="onboarding-check-grid">
                   {(checks.length ? checks : [
-                    { key: 'mailAddress', label: 'QQ 邮箱地址', done: false },
-                    { key: 'mailAuthCode', label: 'QQ 授权码', done: false },
+                    { key: 'mailAddress', label: '邮箱地址', done: false },
+                    { key: 'mailAuthCode', label: '邮箱授权码', done: false },
                     { key: 'deepseekApiKey', label: 'DeepSeek API Key', done: false },
                     { key: 'connection', label: '连接参数', done: false },
                   ]).map((item) => (
@@ -449,13 +553,27 @@ export function DesktopSettings({
             <section className="settings-section">
               <div className="section-heading">
                 <div>
-                  <h3>QQ 邮箱</h3>
-                  <p>使用 QQ 邮箱设置中生成的客户端授权码，不是登录密码。</p>
+                  <h3>{mailProviderLabel(form.mailProvider)}</h3>
+                  <p>
+                    {form.mailProvider === 'qq'
+                      ? '使用 QQ 邮箱设置中生成的客户端授权码，不是登录密码。'
+                      : '使用 163 邮箱设置中生成的客户端授权码，不是登录密码。'}
+                  </p>
                 </div>
-                <Badge tone={config?.hasMailAuthCode ? 'success' : 'warning'}>
-                  {config?.hasMailAuthCode ? '授权码已保存' : '待配置'}
+                <Badge tone={hasActiveMailAuthCode ? 'success' : 'warning'}>
+                  {hasActiveMailAuthCode ? '授权码已保存' : providerChanged ? '需重新配置' : '待配置'}
                 </Badge>
               </div>
+              <SegmentedTabs
+                label="邮箱平台"
+                value={form.mailProvider}
+                compact
+                options={[
+                  { value: 'qq', label: 'QQ 邮箱' },
+                  { value: 'netease_163', label: '163 邮箱' },
+                ]}
+                onChange={setProvider}
+              />
               <label className="settings-field">
                 <span>邮箱地址</span>
                 <input
@@ -464,30 +582,30 @@ export function DesktopSettings({
                   required
                   value={form.mailAddress}
                   onChange={(event) => setField('mailAddress', event.target.value)}
-                  placeholder="name@qq.com"
+                  placeholder={form.mailProvider === 'qq' ? 'name@qq.com' : 'name@163.com'}
                 />
               </label>
               <label className="settings-field">
-                <span>客户端授权码</span>
+                <span>{mailProviderAuthCodeLabel(form.mailProvider)}</span>
                 <input
                   className="field"
                   type="password"
                   autoComplete="new-password"
-                  required={!config?.hasMailAuthCode && !form.clearMailAuthCode}
+                  required={!hasActiveMailAuthCode && !form.clearMailAuthCode}
                   disabled={form.clearMailAuthCode}
                   value={form.mailAuthCode}
                   onChange={(event) => setField('mailAuthCode', event.target.value)}
-                  placeholder={config?.hasMailAuthCode ? '已安全保存；留空保持不变' : '请输入授权码'}
+                  placeholder={hasActiveMailAuthCode ? '已安全保存；留空保持不变' : '请输入授权码'}
                 />
               </label>
-              {config?.hasMailAuthCode && (
+              {hasActiveMailAuthCode && (
                 <label className="settings-check">
                   <input
                     type="checkbox"
                     checked={form.clearMailAuthCode}
                     onChange={(event) => setField('clearMailAuthCode', event.target.checked)}
                   />
-                  <span>保存时清除现有 QQ 邮箱授权码</span>
+                  <span>{`保存时清除现有${mailProviderAuthCodeLabel(form.mailProvider)}`}</span>
                 </label>
               )}
             </section>
@@ -739,7 +857,7 @@ export function DesktopSettings({
                 <div className="section-heading">
                   <div>
                     <h3>危险操作</h3>
-                    <p>清除本机保存的授权、配置、草稿、AI 结果、反馈、缓存和日志。不会删除 QQ 邮箱服务器上的邮件。</p>
+                    <p>清除本机保存的授权、配置、草稿、AI 结果、反馈、缓存和日志。不会删除邮箱服务器上的邮件。</p>
                   </div>
                 </div>
                 <button
@@ -785,12 +903,12 @@ export function DesktopSettings({
       <ConfirmDialog
         state={clearConfirmOpen ? {
           title: '清除 MiaoGent 本机数据',
-          message: '确认后会停止后台 Agent，并删除本机草稿、AI 结果、反馈、配置、日志、缓存、QQ 授权码和 DeepSeek Key。QQ 邮箱服务器上的邮件不会被删除。',
+          message: '确认后会停止后台 Agent，并删除本机草稿、AI 结果、反馈、配置、日志、缓存、邮箱授权码和 DeepSeek Key。邮箱服务器上的邮件不会被删除。',
           confirmLabel: clearing ? '清除中…' : '确认清除',
           tone: 'danger',
           details: (
             <div className="cleanup-confirm-detail">
-              <p>清除后需要重新配置 QQ 邮箱授权码和 DeepSeek API Key。</p>
+              <p>清除后需要重新配置邮箱授权码和 DeepSeek API Key。</p>
               <p>如果缓存文件正被 WebView 占用，可能需要退出应用后由卸载器继续清理。</p>
             </div>
           ),

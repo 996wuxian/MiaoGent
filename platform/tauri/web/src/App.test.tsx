@@ -87,6 +87,7 @@ function insight(overrides: Partial<MailInsight> = {}): MailInsight {
 
 function desktopConfig(overrides: Record<string, unknown> = {}) {
   return {
+    mailProvider: 'qq',
     mailAddress: 'me@qq.com',
     imapHost: 'imap.qq.com',
     imapPort: 993,

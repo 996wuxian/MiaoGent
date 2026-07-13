@@ -1019,7 +1019,7 @@ function App() {
     if (!target) return;
     const confirmed = await askConfirm({
       title: '确认移动到垃圾箱',
-      message: '这会把邮件移动到 QQ 邮箱垃圾箱，不执行永久删除。请再次核对操作对象。',
+      message: '这会把邮件移动到邮箱垃圾箱，不执行永久删除。请再次核对操作对象。',
       confirmLabel: '移动到垃圾箱',
       tone: 'danger',
       details: <ConfirmDetail rows={[['UID', target.uid], ['邮件', target.message.subject], ['发件人', target.message.sender]]} />,
@@ -1172,7 +1172,7 @@ function App() {
         }
         const confirmed = await askConfirm({
           title: '确认发送邮件',
-          message: '以下内容已经保存为本次发送快照。确认后会通过 QQ SMTP 真实发送。',
+          message: '以下内容已经保存为本次发送快照。确认后会通过 SMTP 真实发送。',
           confirmLabel: '确认发送',
           tone: 'danger',
           details: <ConfirmDraft to={saved.to_addr} subject={snapshot.subject} body={snapshot.body} />,
@@ -1398,30 +1398,17 @@ function App() {
           <IconButton icon={theme === 'dark' ? 'sun-2-outline' : 'moon-outline'} label="切换主题" onClick={() => setTheme((value) => (value === 'dark' ? 'light' : 'dark'))} />
           {desktopRuntime && <IconButton icon="settings-outline" label="桌面 Agent 设置" onClick={() => openDesktopSettings('settings')} />}
           <IconButton icon="refresh-outline" label="刷新工作台" onClick={() => void runExclusive('refresh-workspace', refreshWorkspace)} disabled={Boolean(sendingDraftId) || isPending('refresh-workspace')} />
-          <button
-            className="btn btn-primary topbar-primary"
-            aria-label={
-              desktopRuntime
-                ? desktopConnected
-                  ? isPending('desktop-sync') ? '整理中' : '立即整理邮件'
-                  : '打开桌面 Agent 设置'
-                : isPending('secretary-inspection') ? '巡检中' : '开始巡检'
-            }
-            onClick={() => {
-              if (desktopRuntime && !desktopConnected) openDesktopSettings();
-              else void (desktopConnected ? runDesktopSync() : runSecretaryInspection());
-            }}
-            disabled={desktopRuntime ? desktopConnected && isPending('desktop-sync') : isPending('secretary-inspection')}
-          >
-            <AppIcon icon="magic-stick-3-outline" />
-            <span>
-              {desktopRuntime
-                ? desktopConnected
-                  ? isPending('desktop-sync') ? '整理中…' : '立即整理'
-                  : '配置桌面 Agent'
-                : isPending('secretary-inspection') ? '巡检中…' : '开始巡检'}
-            </span>
-          </button>
+          {!desktopRuntime && (
+            <button
+              className="btn btn-primary topbar-primary"
+              aria-label={isPending('secretary-inspection') ? '巡检中' : '开始巡检'}
+              onClick={() => void runSecretaryInspection()}
+              disabled={isPending('secretary-inspection')}
+            >
+              <AppIcon icon="magic-stick-3-outline" />
+              <span>{isPending('secretary-inspection') ? '巡检中…' : '开始巡检'}</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -1429,7 +1416,7 @@ function App() {
         <div className="onboarding-banner" role="status">
           <div>
             <strong>桌面 Agent 配置未完成</strong>
-            <span>补齐 QQ 授权码和 DeepSeek Key 后，才能后台巡检、判断重要邮件并生成草稿。</span>
+            <span>补齐邮箱授权码和 DeepSeek Key 后，才能后台巡检、判断重要邮件并生成草稿。</span>
           </div>
           <button className="btn btn-secondary" type="button" onClick={() => openDesktopSettings('onboarding')}>
             继续配置

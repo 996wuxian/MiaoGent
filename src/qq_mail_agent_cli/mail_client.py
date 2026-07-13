@@ -26,7 +26,7 @@ class IncrementalMailBatch:
 
 
 class MailClient:
-    """Mail protocol boundary for mock data, QQ IMAP, and QQ SMTP."""
+    """Mail protocol boundary for mock data, IMAP, and SMTP."""
 
     def __init__(self, config: MailConfig):
         self._config = config
@@ -275,9 +275,9 @@ class MailClient:
     def _require_mail_credentials(self) -> None:
         missing = []
         if not self._config.address:
-            missing.append("QQ_MAIL_ADDRESS")
+            missing.append("mail address")
         if not self._config.auth_code:
-            missing.append("QQ_MAIL_AUTH_CODE")
+            missing.append("mail authorization code")
         if missing:
             raise RuntimeError(f"Missing required mail config: {', '.join(missing)}")
 
@@ -289,15 +289,16 @@ class MailClient:
                 timeout=self._config.timeout_seconds,
             )
             imap.login(self._config.address, self._config.auth_code)
+            _send_imap_client_id_if_needed(imap, self._config.imap_host)
             return imap
         except imaplib.IMAP4.error as error:
             raise RuntimeError(
-                "QQ IMAP login failed. Check QQ_MAIL_ADDRESS, QQ_MAIL_AUTH_CODE, "
-                "and whether IMAP/SMTP service is enabled in QQ Mail."
+                "Mail IMAP login failed. Check mail address, authorization code, "
+                "and whether IMAP/SMTP service is enabled for this mailbox."
             ) from error
         except OSError as error:
             raise RuntimeError(
-                "QQ IMAP connection failed. Check QQ_MAIL_IMAP_HOST, QQ_MAIL_IMAP_PORT, "
+                "Mail IMAP connection failed. Check IMAP host, IMAP port, "
                 "and current network or DNS availability."
             ) from error
 
@@ -606,6 +607,23 @@ def _parse_search_uids(status: str, data: list[bytes] | tuple[bytes, ...] | None
         (uid for uid in data[0].split() if uid.isdigit()),
         key=int,
     )
+
+
+def _send_imap_client_id_if_needed(imap: imaplib.IMAP4_SSL, host: str) -> None:
+    """Send IMAP ID for providers that reject mailbox selection without it.
+
+    NetEase 163 can accept LOGIN but later reject SELECT/EXAMINE with
+    "Unsafe Login" unless the client identifies itself first.
+    """
+    if "163.com" not in host.lower():
+        return
+    imaplib.Commands.setdefault("ID", ("AUTH", "NONAUTH"))
+    status, _ = imap._simple_command(  # type: ignore[attr-defined]
+        "ID",
+        '("name" "MiaoGent" "version" "1.0" "vendor" "MiaoGent")',
+    )
+    if status != "OK":
+        raise imaplib.IMAP4.error("IMAP ID command failed")
 
 
 def _normalize_uids(mail_ids: list[str]) -> list[str]:

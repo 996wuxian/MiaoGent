@@ -16,8 +16,56 @@ const CUSTOM_DATA_DIR_NAME: &str = "data";
 const CUSTOM_WEBVIEW_DIR_NAME: &str = "webview";
 const STATE_DB_FILE: &str = "state.sqlite3";
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MailProvider {
+    Qq,
+    #[serde(rename = "netease_163")]
+    Netease163,
+}
+
+impl Default for MailProvider {
+    fn default() -> Self {
+        Self::Qq
+    }
+}
+
+impl MailProvider {
+    fn address_label(self) -> &'static str {
+        match self {
+            Self::Qq => "QQ 邮箱地址",
+            Self::Netease163 => "163 邮箱地址",
+        }
+    }
+
+    fn auth_code_label(self) -> &'static str {
+        match self {
+            Self::Qq => "QQ 授权码",
+            Self::Netease163 => "163 授权码",
+        }
+    }
+
+    fn default_imap_host(self) -> &'static str {
+        match self {
+            Self::Qq => "imap.qq.com",
+            Self::Netease163 => "imap.163.com",
+        }
+    }
+
+    fn default_smtp_host(self) -> &'static str {
+        match self {
+            Self::Qq => "smtp.qq.com",
+            Self::Netease163 => "smtp.163.com",
+        }
+    }
+}
+
+fn default_mail_provider() -> MailProvider {
+    MailProvider::default()
+}
+
 fn default_imap_host() -> String {
-    "imap.qq.com".to_string()
+    MailProvider::default().default_imap_host().to_string()
 }
 
 fn default_imap_port() -> u16 {
@@ -25,7 +73,7 @@ fn default_imap_port() -> u16 {
 }
 
 fn default_smtp_host() -> String {
-    "smtp.qq.com".to_string()
+    MailProvider::default().default_smtp_host().to_string()
 }
 
 fn default_smtp_port() -> u16 {
@@ -47,6 +95,8 @@ fn default_deepseek_timeout() -> u16 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 struct StoredDesktopConfig {
+    #[serde(default = "default_mail_provider")]
+    mail_provider: MailProvider,
     mail_address: String,
     #[serde(default = "default_imap_host")]
     imap_host: String,
@@ -71,6 +121,7 @@ struct StoredDesktopConfig {
 impl Default for StoredDesktopConfig {
     fn default() -> Self {
         Self {
+            mail_provider: default_mail_provider(),
             mail_address: String::new(),
             imap_host: default_imap_host(),
             imap_port: default_imap_port(),
@@ -88,6 +139,7 @@ impl Default for StoredDesktopConfig {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopConfigInput {
+    mail_provider: MailProvider,
     mail_address: String,
     imap_host: String,
     imap_port: u16,
@@ -107,6 +159,7 @@ pub struct DesktopConfigInput {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopConfigView {
+    mail_provider: MailProvider,
     mail_address: String,
     imap_host: String,
     imap_port: u16,
@@ -201,7 +254,10 @@ fn save_stored<R: Runtime>(app: &AppHandle<R>, config: &StoredDesktopConfig) -> 
 fn validate(config: &StoredDesktopConfig) -> Result<(), String> {
     let address = config.mail_address.trim();
     if !address.is_empty() && (!address.contains('@') || address.chars().any(char::is_whitespace)) {
-        return Err("QQ 邮箱地址格式不正确".to_string());
+        return Err(format!(
+            "{}格式不正确",
+            config.mail_provider.address_label()
+        ));
     }
     if config.imap_host.trim().is_empty() || config.smtp_host.trim().is_empty() {
         return Err("IMAP/SMTP 主机不能为空".to_string());
@@ -277,6 +333,7 @@ fn view<R: Runtime>(
 ) -> Result<DesktopConfigView, String> {
     let locations = locations_from_config(app, &config)?;
     Ok(DesktopConfigView {
+        mail_provider: config.mail_provider,
         mail_address: config.mail_address,
         imap_host: config.imap_host,
         imap_port: config.imap_port,
@@ -306,7 +363,10 @@ pub fn save<R: Runtime>(
     input: DesktopConfigInput,
 ) -> Result<DesktopConfigView, String> {
     if input.clear_mail_auth_code && input.mail_auth_code.is_some() {
-        return Err("不能同时更新和清除 QQ 邮箱授权码".to_string());
+        return Err(format!(
+            "不能同时更新和清除{}",
+            input.mail_provider.auth_code_label()
+        ));
     }
     if input.clear_deepseek_api_key && input.deepseek_api_key.is_some() {
         return Err("不能同时更新和清除 DeepSeek API Key".to_string());
@@ -314,6 +374,7 @@ pub fn save<R: Runtime>(
 
     let current = load_stored(app)?;
     let config = StoredDesktopConfig {
+        mail_provider: input.mail_provider,
         mail_address: input.mail_address.trim().to_string(),
         imap_host: input.imap_host.trim().to_string(),
         imap_port: input.imap_port,
@@ -332,7 +393,10 @@ pub fn save<R: Runtime>(
     } else if let Some(value) = input.mail_auth_code {
         let value = value.trim();
         if value.is_empty() {
-            return Err("QQ 邮箱授权码不能为空".to_string());
+            return Err(format!(
+                "{}不能为空",
+                config.mail_provider.auth_code_label()
+            ));
         }
         set_secret(MAIL_AUTH_CREDENTIAL, value)?;
     }
@@ -817,6 +881,18 @@ mod tests {
         let text = value.to_string();
         assert!(!text.contains("authCode"));
         assert!(!text.contains("apiKey"));
+    }
+
+    #[test]
+    fn mail_provider_defaults_to_qq_and_serializes_netease_163() {
+        let legacy: StoredDesktopConfig =
+            serde_json::from_value(serde_json::json!({ "mailAddress": "me@qq.com" })).unwrap();
+        assert_eq!(legacy.mail_provider, MailProvider::Qq);
+
+        let mut config = StoredDesktopConfig::default();
+        config.mail_provider = MailProvider::Netease163;
+        let value = serde_json::to_value(config).unwrap();
+        assert_eq!(value["mailProvider"], "netease_163");
     }
 
     #[test]

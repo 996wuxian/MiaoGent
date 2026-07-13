@@ -246,6 +246,7 @@ export function SegmentedTabs<T extends string>({
       {options.map((option) => (
         <button
           key={option.value}
+          type="button"
           role="tab"
           aria-selected={value === option.value}
           className={value === option.value ? 'is-active' : ''}

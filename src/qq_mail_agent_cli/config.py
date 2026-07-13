@@ -13,6 +13,7 @@ class MailConfig:
     auth_code: str | None
     timeout_seconds: int = 30
     max_auto_fetch_bytes: int = 5_000_000
+    provider: str = "qq"
 
 
 @dataclass(frozen=True)
@@ -47,15 +48,51 @@ def load_env_file(path: str | Path = ".env") -> None:
 def load_mail_config(*, load_dotenv: bool = True) -> MailConfig:
     if load_dotenv:
         load_env_file()
+    provider = _mail_provider()
+    provider_prefix = "163_MAIL" if provider == "netease_163" else "QQ_MAIL"
+    fallback_prefixes = ("QQ_MAIL",) if provider == "qq" else ()
     return MailConfig(
-        address=os.getenv("QQ_MAIL_ADDRESS"),
-        imap_host=os.getenv("QQ_MAIL_IMAP_HOST", "imap.qq.com"),
-        imap_port=int(os.getenv("QQ_MAIL_IMAP_PORT", "993")),
-        smtp_host=os.getenv("QQ_MAIL_SMTP_HOST", "smtp.qq.com"),
-        smtp_port=int(os.getenv("QQ_MAIL_SMTP_PORT", "465")),
-        auth_code=os.getenv("QQ_MAIL_AUTH_CODE"),
+        address=_first_env(
+            "MAIL_ADDRESS",
+            f"{provider_prefix}_ADDRESS",
+            *(f"{prefix}_ADDRESS" for prefix in fallback_prefixes),
+        ),
+        imap_host=_first_env(
+            "MAIL_IMAP_HOST",
+            f"{provider_prefix}_IMAP_HOST",
+            *(f"{prefix}_IMAP_HOST" for prefix in fallback_prefixes),
+            default="imap.163.com" if provider == "netease_163" else "imap.qq.com",
+        ),
+        imap_port=int(
+            _first_env(
+                "MAIL_IMAP_PORT",
+                f"{provider_prefix}_IMAP_PORT",
+                *(f"{prefix}_IMAP_PORT" for prefix in fallback_prefixes),
+                default="993",
+            )
+        ),
+        smtp_host=_first_env(
+            "MAIL_SMTP_HOST",
+            f"{provider_prefix}_SMTP_HOST",
+            *(f"{prefix}_SMTP_HOST" for prefix in fallback_prefixes),
+            default="smtp.163.com" if provider == "netease_163" else "smtp.qq.com",
+        ),
+        smtp_port=int(
+            _first_env(
+                "MAIL_SMTP_PORT",
+                f"{provider_prefix}_SMTP_PORT",
+                *(f"{prefix}_SMTP_PORT" for prefix in fallback_prefixes),
+                default="465",
+            )
+        ),
+        auth_code=_first_env(
+            "MAIL_AUTH_CODE",
+            f"{provider_prefix}_AUTH_CODE",
+            *(f"{prefix}_AUTH_CODE" for prefix in fallback_prefixes),
+        ),
         timeout_seconds=int(os.getenv("QQ_MAIL_IMAP_TIMEOUT_SECONDS", "30")),
         max_auto_fetch_bytes=int(os.getenv("QQ_MAIL_AGENT_MAX_MESSAGE_BYTES", "5000000")),
+        provider=provider,
     )
 
 
@@ -73,3 +110,20 @@ def load_deepseek_config(*, load_dotenv: bool = True) -> DeepSeekConfig:
 def load_app_config() -> AppConfig:
     load_env_file()
     return AppConfig(db_path=Path(os.getenv("QQ_MAIL_AGENT_DB_PATH", ".mail_agent_state/state.sqlite3")))
+
+
+def _first_env(*keys: str, default: str | None = None) -> str | None:
+    for key in keys:
+        value = os.getenv(key)
+        if value:
+            return value
+    return default
+
+
+def _mail_provider() -> str:
+    explicit = os.getenv("MAIL_PROVIDER") or os.getenv("QQ_MAIL_PROVIDER")
+    if explicit in {"qq", "netease_163"}:
+        return explicit
+    if os.getenv("163_MAIL_ADDRESS") or os.getenv("163_MAIL_AUTH_CODE"):
+        return "netease_163"
+    return "qq"

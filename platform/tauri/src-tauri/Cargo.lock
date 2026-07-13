@@ -2233,7 +2233,7 @@ dependencies = [
 
 [[package]]
 name = "miaogent"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "keyring",
  "log",

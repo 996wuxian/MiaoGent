@@ -98,19 +98,6 @@ def create_app(
     if session_token is not None and len(session_token) < 32:
         raise ValueError("desktop session token must contain at least 32 characters")
     app = FastAPI(title="QQ Mail Agent Web API")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://127.0.0.1:5173",
-            "http://localhost:5173",
-            "tauri://localhost",
-            "http://tauri.localhost",
-            "https://tauri.localhost",
-        ],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     app.state.mail_client_factory = mail_client_factory or (lambda: MailClient(load_mail_config()))
     app.state.agent_factory = agent_factory or _build_deepseek_agent
@@ -140,6 +127,20 @@ def create_app(
             if not authorized:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     dist_dir = Path(__file__).resolve().parents[2] / "web" / "dist"
     assets_dir = dist_dir / "assets"
@@ -189,6 +190,11 @@ def create_app(
             messages = client.list_real_recent(limit, offset=offset)
         except RuntimeError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"邮箱列表暂时无法读取，请检查邮箱配置或稍后重试。原始错误：{error}",
+            ) from error
         for message in messages:
             store.upsert_mail(message)
         return [message_to_response(message, include_body=False) for message in messages]

@@ -272,7 +272,7 @@ def _classify_startup_failure(error: Exception) -> dict[str, str]:
     message = str(error)
     if "Missing required mail config" in message:
         missing = _safe_missing_config_detail(message)
-        detail = "桌面 Agent 配置未完成，请打开右上角“桌面 Agent 设置”，填写 QQ 邮箱地址和客户端授权码。"
+        detail = "桌面 Agent 配置未完成，请打开右上角“桌面 Agent 设置”，填写邮箱地址和客户端授权码。"
         if missing:
             detail = f"{detail} 缺少：{missing}。"
         return {
@@ -290,13 +290,13 @@ def _classify_startup_failure(error: Exception) -> dict[str, str]:
         return {
             "uid": "mailbox",
             "stage": "imap_login",
-            "error": "RuntimeError: QQ IMAP 登录失败，请检查 QQ 邮箱地址、客户端授权码和 IMAP/SMTP 服务是否已开启。",
+            "error": "RuntimeError: IMAP 登录失败，请检查邮箱地址、客户端授权码和 IMAP/SMTP 服务是否已开启。",
         }
     if "IMAP connection failed" in message or "incremental fetch" in message:
         return {
             "uid": "mailbox",
             "stage": "imap_connection",
-            "error": "RuntimeError: QQ IMAP 连接暂时失败，请检查网络、DNS 或 IMAP 服务状态后重试。",
+            "error": "RuntimeError: IMAP 连接暂时失败，请检查网络、DNS 或 IMAP 服务状态后重试。",
         }
     if "DeepSeek API" in message:
         return {

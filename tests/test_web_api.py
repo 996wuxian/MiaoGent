@@ -141,6 +141,38 @@ def test_web_recent_messages_returns_json_error_on_mail_failure(tmp_path):
     assert response.json()["detail"] == "QQ IMAP connection failed."
 
 
+def test_web_recent_messages_returns_json_error_on_unexpected_mail_failure(tmp_path):
+    class FailingMailClient(FakeMailClient):
+        def list_real_recent(self, limit: int, *, offset: int = 0):
+            raise ValueError("SEARCH illegal in state AUTH")
+
+    client, _, _ = _client(tmp_path, mail_client=FailingMailClient())
+
+    response = client.get("/api/messages/recent?limit=2")
+
+    assert response.status_code == 502
+    assert "邮箱列表暂时无法读取" in response.json()["detail"]
+
+
+def test_desktop_auth_error_keeps_cors_headers(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite3")
+    app = create_app(
+        mail_client_factory=FakeMailClient,  # type: ignore[arg-type]
+        agent_factory=MailAgent,
+        state_store_factory=lambda: store,
+        session_token="x" * 32,
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/messages/recent?limit=2",
+        headers={"Origin": "http://127.0.0.1:5173"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
 def test_web_message_detail_includes_body(tmp_path):
     client, _, _ = _client(tmp_path)
 

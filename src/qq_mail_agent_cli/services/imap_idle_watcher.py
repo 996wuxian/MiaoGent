@@ -145,7 +145,7 @@ class ImapIdleWatcher:
 
     def _require_credentials(self) -> None:
         if not self._config.address or not self._config.auth_code:
-            raise RuntimeError("QQ 邮箱地址或授权码未配置")
+            raise RuntimeError("邮箱地址或授权码未配置")
 
 
 def _default_client_factory(host: str, *, port: int, ssl: bool, timeout: float):

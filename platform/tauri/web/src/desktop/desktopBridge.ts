@@ -2,8 +2,10 @@ import { configureDesktopApi } from '../api';
 import type { DesktopBackendConnection, DesktopEvent } from '../types';
 
 export type DesktopTarget = { kind: 'summary' } | { kind: 'mail'; uid: string };
+export type MailProvider = 'qq' | 'netease_163';
 
 export type DesktopConfigView = {
+  mailProvider: MailProvider;
   mailAddress: string;
   imapHost: string;
   imapPort: number;
@@ -41,6 +43,19 @@ export type DesktopConfigInput = Omit<
   clearDeepseekApiKey?: boolean;
 };
 
+const mailProviderLabels: Record<MailProvider, { address: string; authCode: string; title: string }> = {
+  qq: { address: 'QQ 邮箱地址', authCode: 'QQ 授权码', title: 'QQ 邮箱' },
+  netease_163: { address: '163 邮箱地址', authCode: '163 授权码', title: '163 邮箱' },
+};
+
+export function mailProviderLabel(provider: MailProvider) {
+  return mailProviderLabels[provider].title;
+}
+
+export function mailProviderAuthCodeLabel(provider: MailProvider) {
+  return mailProviderLabels[provider].authCode;
+}
+
 export type UserDataCleanupReport = {
   removedPaths: string[];
   missingPaths: string[];
@@ -76,9 +91,10 @@ export type DesktopUpdateInfo = {
 };
 
 export function desktopConfigChecks(config: DesktopConfigView) {
+  const labels = mailProviderLabels[config.mailProvider];
   return [
-    { key: 'mailAddress', label: 'QQ 邮箱地址', done: Boolean(config.mailAddress.trim()) },
-    { key: 'mailAuthCode', label: 'QQ 授权码', done: config.hasMailAuthCode },
+    { key: 'mailAddress', label: labels.address, done: Boolean(config.mailAddress.trim()) },
+    { key: 'mailAuthCode', label: labels.authCode, done: config.hasMailAuthCode },
     { key: 'deepseekApiKey', label: 'DeepSeek API Key', done: config.hasDeepseekApiKey },
     {
       key: 'connection',

@@ -3,12 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const desktopMocks = vi.hoisted(() => ({
-  desktopConfigChecks: (value: typeof config) => [
-    { key: 'mailAddress', label: 'QQ 邮箱地址', done: Boolean(value.mailAddress.trim()) },
-    { key: 'mailAuthCode', label: 'QQ 授权码', done: value.hasMailAuthCode },
+  desktopConfigChecks: (value: { mailProvider: 'qq' | 'netease_163'; mailAddress: string; hasMailAuthCode: boolean; hasDeepseekApiKey: boolean }) => [
+    { key: 'mailAddress', label: value.mailProvider === 'netease_163' ? '163 邮箱地址' : 'QQ 邮箱地址', done: Boolean(value.mailAddress.trim()) },
+    { key: 'mailAuthCode', label: value.mailProvider === 'netease_163' ? '163 授权码' : 'QQ 授权码', done: value.hasMailAuthCode },
     { key: 'deepseekApiKey', label: 'DeepSeek API Key', done: value.hasDeepseekApiKey },
     { key: 'connection', label: '连接参数', done: true },
   ],
+  mailProviderLabel: (value: 'qq' | 'netease_163') => (value === 'netease_163' ? '163 邮箱' : 'QQ 邮箱'),
+  mailProviderAuthCodeLabel: (value: 'qq' | 'netease_163') => (value === 'netease_163' ? '163 授权码' : 'QQ 授权码'),
   getDesktopConfig: vi.fn(),
   saveDesktopConfig: vi.fn(),
   clearDesktopUserData: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('../desktop/desktopBridge', () => desktopMocks);
 import { DesktopSettings } from './DesktopSettings';
 
 const config = {
+  mailProvider: 'qq' as const,
   mailAddress: 'me@qq.com',
   imapHost: 'imap.qq.com',
   imapPort: 993,
@@ -116,7 +119,7 @@ describe('DesktopSettings', () => {
     const onSaved = vi.fn();
     render(<DesktopSettings open onClose={() => undefined} onSaved={onSaved} />);
 
-    const authCode = await screen.findByLabelText('客户端授权码');
+    const authCode = await screen.findByLabelText('QQ 授权码');
     const apiKey = screen.getByLabelText('API Key');
     expect(authCode).toHaveValue('');
     expect(apiKey).toHaveValue('');
@@ -129,6 +132,7 @@ describe('DesktopSettings', () => {
     expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         mailAddress: 'me@qq.com',
+        mailProvider: 'qq',
         mailAuthCode: 'mail-secret',
         deepseekApiKey: 'deepseek-secret',
       }),
@@ -147,6 +151,40 @@ describe('DesktopSettings', () => {
     await waitFor(() => expect(desktopMocks.setAutostartEnabled).toHaveBeenCalledWith(false));
   });
 
+  it('switches the mail provider tab locally and applies 163 defaults only on save', async () => {
+    const user = userEvent.setup();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+
+    await screen.findByRole('tab', { name: 'QQ 邮箱' });
+    await user.click(screen.getByRole('tab', { name: '163 邮箱' }));
+
+    expect(screen.getByRole('tab', { name: '163 邮箱' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('邮箱地址')).toHaveAttribute('placeholder', 'name@163.com');
+    expect(screen.getByLabelText('邮箱地址')).toHaveValue('');
+    expect(screen.getByLabelText('163 授权码')).toBeInTheDocument();
+    expect(desktopMocks.saveDesktopConfig).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText('高级连接设置'));
+    expect(screen.getByLabelText('IMAP 主机')).toHaveValue('imap.qq.com');
+    expect(screen.getByLabelText('SMTP 主机')).toHaveValue('smtp.qq.com');
+
+    await user.type(screen.getByLabelText('邮箱地址'), 'me@163.com');
+    await user.type(screen.getByLabelText('163 授权码'), 'netease-secret');
+    await user.type(screen.getByLabelText('API Key'), 'deepseek-secret');
+    await user.click(screen.getByRole('button', { name: '保存并重启 Agent' }));
+
+    await waitFor(() => expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledTimes(1));
+    expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mailProvider: 'netease_163',
+        mailAddress: 'me@163.com',
+        imapHost: 'imap.163.com',
+        smtpHost: 'smtp.163.com',
+        mailAuthCode: 'netease-secret',
+      }),
+    );
+  });
+
   it('never submits a replacement secret together with its clear flag', async () => {
     desktopMocks.getDesktopConfig.mockResolvedValue({
       ...config,
@@ -156,9 +194,9 @@ describe('DesktopSettings', () => {
     const user = userEvent.setup();
     render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
 
-    const authCode = await screen.findByLabelText('客户端授权码');
+    const authCode = await screen.findByLabelText('QQ 授权码');
     await user.type(authCode, 'replacement-secret');
-    await user.click(screen.getByRole('checkbox', { name: /清除现有 QQ 邮箱授权码/ }));
+    await user.click(screen.getByRole('checkbox', { name: /清除现有QQ 授权码/ }));
     await user.click(screen.getByRole('button', { name: '保存并重启 Agent' }));
 
     await waitFor(() => expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledTimes(1));
