@@ -931,6 +931,97 @@ describe('MiaoGent workbench', () => {
     expect(within(badges).getByText('敏感')).toBeInTheDocument();
   });
 
+  it('标题分类后无摘要时可按需生成一般邮件摘要', async () => {
+    const titleOnlyInsight = insight({
+      uid: 'uid:10',
+      subject: '普通项目沟通',
+      summary_zh: '',
+      analysis_status: 'title_classified',
+      importance: 'general',
+      needs_reply: false,
+      analysis_error: null,
+    });
+    const generatedInsight = insight({
+      ...titleOnlyInsight,
+      summary_zh: '这是按需生成的摘要。',
+      analysis_status: 'analyzed',
+    });
+    const fetchMock = installFetch({
+      recent: [message('uid:10', '普通项目沟通', true)],
+      handler: (url, init) => {
+        if (url.startsWith('/api/insights?')) return jsonResponse([titleOnlyInsight]);
+        if (url === '/api/insights/uid%3A10') return jsonResponse(titleOnlyInsight);
+        if (url === '/api/messages/uid%3A10/summary' && init?.method === 'POST') return jsonResponse(generatedInsight);
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '全部' }));
+    const card = (await screen.findByText('普通项目沟通')).closest('article');
+    expect(card).not.toBeNull();
+    await user.click(within(card as HTMLElement).getByRole('button', { name: /普通项目沟通/ }));
+
+    expect(await screen.findByText('尚未生成 Agent 摘要。')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '生成摘要' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/messages/uid%3A10/summary' && init?.method === 'POST');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ confirmed: false });
+    });
+    expect((await screen.findAllByText('这是按需生成的摘要。')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('dialog', { name: /确认为/ })).not.toBeInTheDocument();
+  });
+
+  it('敏感邮件按需生成摘要前必须二次确认', async () => {
+    const sensitiveInsight = insight({
+      uid: 'uid:10',
+      subject: '录用通知 Offer Letter',
+      summary_zh: '',
+      analysis_status: 'title_classified',
+      importance: 'important',
+      needs_reply: false,
+      analysis_error: 'privacy_sensitive',
+    });
+    const generatedInsight = insight({
+      ...sensitiveInsight,
+      summary_zh: '敏感邮件确认后生成的摘要。',
+      analysis_status: 'analyzed',
+    });
+    const fetchMock = installFetch({
+      recent: [message('uid:10', '录用通知 Offer Letter', true)],
+      handler: (url, init) => {
+        if (url.startsWith('/api/insights?')) return jsonResponse([sensitiveInsight]);
+        if (url === '/api/insights/uid%3A10') return jsonResponse(sensitiveInsight);
+        if (url === '/api/messages/uid%3A10/summary' && init?.method === 'POST') return jsonResponse(generatedInsight);
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '全部' }));
+    const card = (await screen.findByText('录用通知 Offer Letter')).closest('article');
+    expect(card).not.toBeNull();
+    await user.click(within(card as HTMLElement).getByRole('button', { name: /录用通知 Offer Letter/ }));
+    await user.click(await screen.findByRole('button', { name: '生成摘要' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '确认为敏感邮件生成摘要' });
+    expect(within(dialog).getByText('生成摘要会把邮件正文发送给 AI 服务。请确认你接受这次发送。')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/messages/uid%3A10/summary')).toBe(false);
+
+    await user.click(within(dialog).getByRole('button', { name: '确认生成摘要' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/messages/uid%3A10/summary' && init?.method === 'POST');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ confirmed: true });
+    });
+    expect((await screen.findAllByText('敏感邮件确认后生成的摘要。')).length).toBeGreaterThanOrEqual(1);
+  });
+
   it('详情顶部折叠队列和洞察的重复待回复标签', async () => {
     const replyInsight = insight({
       uid: 'uid:10',

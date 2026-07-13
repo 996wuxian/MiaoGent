@@ -30,7 +30,7 @@ import {
   type IconName,
 } from './components/ui';
 import { useExclusiveAction } from './hooks/useExclusiveAction';
-import { isSensitiveMail } from './mailPrivacy';
+import { getMailPrivacyLevel, isSensitiveMail } from './mailPrivacy';
 import type {
   ActionLog,
   Draft,
@@ -1021,6 +1021,47 @@ function App() {
     });
   }
 
+  async function generateSummaryForSelected() {
+    const target = validateTarget();
+    if (!target) return;
+    const privacyLevel = getMailPrivacyLevel({
+      analysis_error: selectedInsight.data?.analysis_error,
+      subject: selectedInsight.data?.subject ?? target.message.subject,
+      sender: selectedInsight.data?.sender ?? target.message.sender,
+      summary_zh: selectedInsight.data?.summary_zh,
+      priority_reason: selectedInsight.data?.priority_reason,
+    });
+    let confirmed = false;
+    if (privacyLevel !== 'normal') {
+      confirmed = await askConfirm({
+        title: privacyLevel === 'private' ? '确认为隐私邮件生成摘要' : '确认为敏感邮件生成摘要',
+        message: '生成摘要会把邮件正文发送给 AI 服务。请确认你接受这次发送。',
+        confirmLabel: '确认生成摘要',
+        tone: 'warning',
+        details: <ConfirmDetail rows={[['邮件', target.message.subject], ['发件人', target.message.sender]]} />,
+      });
+      if (!confirmed || !targetStillValid(target.uid, target.message)) {
+        if (confirmed) announce('error', '邮件选择已变化，已取消生成摘要。');
+        return;
+      }
+    }
+    await runExclusive(`summary:${target.uid}`, async () => {
+      announce('loading', '正在生成摘要…');
+      try {
+        const updated = await api.generateSummary(target.uid, confirmed);
+        if (!targetStillValid(target.uid, target.message) || !sameUid(updated.uid, target.uid)) return;
+        setSelectedInsight({ data: updated, loading: false, error: '' });
+        setInsights((current) => ({
+          ...current,
+          data: current.data.map((item) => (sameUid(item.uid, updated.uid) ? updated : item)),
+        }));
+        announce('success', '摘要已生成。');
+      } catch (error) {
+        announce('error', errorMessage(error));
+      }
+    });
+  }
+
   async function moveSelectedToTrash() {
     const target = validateTarget();
     if (!target) return;
@@ -1377,7 +1418,7 @@ function App() {
   const activeListResource = leftView === 'queue' ? queue : leftView === 'insights' ? insights : search;
   const selectedInsightRequiresReview = Boolean(
     selectedInsight.data &&
-      (selectedInsight.data.analysis_status !== 'analyzed' || selectedInsight.data.confidence < 0.55),
+      (!['analyzed', 'title_classified'].includes(selectedInsight.data.analysis_status) || selectedInsight.data.confidence < 0.55),
   );
   const selectedDetailBadges = useMemo(
     () => buildDetailBadges(selectedDetail, selectedInsight.data, selectedInsightRequiresReview),
@@ -1586,7 +1627,13 @@ function App() {
             {detail.error && <InlineError message={detail.error} onRetry={() => selectedId && void selectMessage(selectedId)} />}
             {selectedDetail ? (
               <>
-                {selectedInsight.data && <InsightSummary item={selectedInsight.data} />}
+                {selectedInsight.data && (
+                  <InsightSummary
+                    item={selectedInsight.data}
+                    onGenerateSummary={generateSummaryForSelected}
+                    summaryPending={selectedDetail ? isPending(`summary:${normalizeUid(selectedDetail.id)}`) : false}
+                  />
+                )}
                 {translationVisible && (
                   <SegmentedTabs
                     label="邮件正文视图"
@@ -1865,7 +1912,7 @@ function MailListCard({
 }) {
   const requiresReview = Boolean(
     item.analysisStatus &&
-      (item.analysisStatus !== 'analyzed' || (item.confidence ?? 0) < 0.55),
+      (!['analyzed', 'title_classified'].includes(item.analysisStatus) || (item.confidence ?? 0) < 0.55),
   );
   const sensitive = isSensitiveMail({
     analysis_error: item.analysisError,
@@ -2128,14 +2175,16 @@ function buildDetailBadges(
       tone: detail.is_seen ? 'neutral' : 'warning',
     });
   }
-  const sensitive = isSensitiveMail({
+  const privacyLevel = getMailPrivacyLevel({
     analysis_error: insight?.analysis_error,
     subject: insight?.subject ?? detail?.subject,
     sender: insight?.sender ?? detail?.sender,
     summary_zh: insight?.summary_zh,
     priority_reason: insight?.priority_reason,
   });
-  if (sensitive) badges.push({ key: 'sensitive', label: '敏感', tone: 'danger' });
+  if (privacyLevel !== 'normal') {
+    badges.push({ key: 'privacy', label: privacyLevel === 'private' ? '隐私' : '敏感', tone: 'danger' });
+  }
   if (!insight) return badges;
   if (requiresReview) {
     badges.push({ key: 'review', label: '待人工查看', tone: 'warning' });
@@ -2167,7 +2216,16 @@ function buildListBadges(
   const replyPending = Boolean(
     item.needsReply && !['sent', 'not_needed', 'draft_ready'].includes(item.replyStatus ?? ''),
   );
-  if (sensitive) badges.push({ key: 'sensitive', label: '敏感', tone: 'danger' });
+  if (sensitive) {
+    const privacyLevel = getMailPrivacyLevel({
+      analysis_error: item.analysisError,
+      subject: item.subject,
+      sender: item.sender,
+      summary_zh: item.summary,
+      priority_reason: item.reason,
+    });
+    badges.push({ key: 'privacy', label: privacyLevel === 'private' ? '隐私' : '敏感', tone: 'danger' });
+  }
   if (requiresReview) {
     badges.push({ key: 'review', label: '待人工查看', tone: 'warning' });
   } else if (item.importance) {

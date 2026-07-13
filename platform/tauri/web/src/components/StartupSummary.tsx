@@ -1,5 +1,5 @@
 import { AppIcon, Badge } from './ui';
-import { isSensitiveMail } from '../mailPrivacy';
+import { getMailPrivacyLevel } from '../mailPrivacy';
 
 const importanceLabel: Record<string, string> = {
   general: '一般',
@@ -7,7 +7,7 @@ const importanceLabel: Record<string, string> = {
   urgent: '紧急',
 };
 
-export function InsightSummary({ item }: { item: {
+export function InsightSummary({ item, onGenerateSummary, summaryPending }: { item: {
   importance: string;
   needs_reply: boolean;
   summary_zh: string;
@@ -17,9 +17,10 @@ export function InsightSummary({ item }: { item: {
   analysis_status: string;
   analysis_error: string | null;
   reply_status: string;
-} }) {
-  const requiresReview = item.analysis_status !== 'analyzed' || item.confidence < 0.55;
-  const sensitive = isSensitiveMail(item);
+}; onGenerateSummary?: () => void; summaryPending?: boolean }) {
+  const requiresReview = !['analyzed', 'title_classified'].includes(item.analysis_status) || item.confidence < 0.55;
+  const privacyLevel = getMailPrivacyLevel(item);
+  const hasSummary = item.summary_zh.trim().length > 0;
   return (
     <section className={`insight-summary is-${item.importance}`}>
       <div className="section-title">
@@ -32,11 +33,16 @@ export function InsightSummary({ item }: { item: {
             {importanceLabel[item.importance] ?? item.importance}
           </Badge>
         )}
-        {sensitive && <Badge tone="danger">敏感</Badge>}
+        {privacyLevel !== 'normal' && <Badge tone="danger">{privacyLevel === 'private' ? '隐私' : '敏感'}</Badge>}
         {item.needs_reply && !['sent', 'not_needed'].includes(item.reply_status) && <Badge tone="info">需要回复</Badge>}
         {item.reply_status === 'sent' && <Badge tone="success">已回复</Badge>}
       </div>
-      <p>{item.summary_zh || '暂无摘要'}</p>
+      <p>{hasSummary ? item.summary_zh : '尚未生成 Agent 摘要。'}</p>
+      {!hasSummary && onGenerateSummary && (
+        <button className="btn btn-secondary mini-button" type="button" onClick={onGenerateSummary} disabled={summaryPending}>
+          {summaryPending ? '生成中…' : '生成摘要'}
+        </button>
+      )}
       {item.analysis_error && <small>分析状态：{item.analysis_error}</small>}
       {item.priority_reason && <small>判断依据：{item.priority_reason} · 置信度 {Math.round(item.confidence * 100)}%</small>}
       {item.action_items.length > 0 && (

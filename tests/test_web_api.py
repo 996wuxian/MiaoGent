@@ -12,6 +12,7 @@ from qq_mail_agent_cli.models import (
     MailClassification,
     MailImportance,
     MailMessage,
+    MailSummary,
     SuggestedAction,
     TriageResult,
 )
@@ -83,6 +84,7 @@ class RecordingMailAgent(MailAgent):
         self.triage_calls: list[str] = []
         self.draft_calls: list[str] = []
         self.translation_calls: list[str] = []
+        self.summary_calls: list[str] = []
 
     def triage(self, message: MailMessage) -> TriageResult:
         self.triage_calls.append(message.id)
@@ -97,6 +99,16 @@ class RecordingMailAgent(MailAgent):
     def translate_message(self, message: MailMessage):
         self.translation_calls.append(message.id)
         return super().translate_message(message)
+
+    def summarize_message(self, message: MailMessage) -> MailSummary:
+        self.summary_calls.append(message.id)
+        return MailSummary(
+            mail_id=message.id,
+            summary_zh=f"{message.subject} 按需摘要",
+            action_items=("查看正文要点",),
+            confidence=0.82,
+            reason="测试替身生成摘要。",
+        )
 
 
 def _client(
@@ -180,6 +192,73 @@ def test_web_message_detail_includes_body(tmp_path):
 
     assert response.status_code == 200
     assert response.json()["body"] == "Can you reply with your available time?"
+
+
+def test_web_generates_summary_on_demand_for_normal_mail(tmp_path):
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, agent=agent)
+
+    response = client.post("/api/messages/101/summary", json={"confirmed": False})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["uid"] == "uid:101"
+    assert payload["analysis_status"] == "analyzed"
+    assert payload["summary_zh"] == "Interview question 按需摘要"
+    assert payload["analysis_error"] is None
+    assert agent.summary_calls == ["uid:101"]
+    stored = store.get_mail_insight("uid:101")
+    assert stored is not None
+    assert stored.summary_zh == "Interview question 按需摘要"
+
+
+def test_web_summary_requires_confirmation_for_sensitive_title(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = MailMessage(
+        id="uid:101",
+        sender="hr@example.com",
+        recipient="me@qq.com",
+        subject="录用通知 Offer Letter",
+        body="请确认薪资待遇和身份证信息。",
+        snippet="录用通知",
+        is_seen=False,
+    )
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/messages/101/summary", json={"confirmed": False})
+
+    assert response.status_code == 409
+    assert "生成摘要会把正文发送给 AI" in response.json()["detail"]
+    assert agent.summary_calls == []
+    assert store.get_mail_insight("uid:101") is None
+
+
+def test_web_summary_allows_sensitive_title_after_confirmation(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = MailMessage(
+        id="uid:101",
+        sender="hr@example.com",
+        recipient="me@qq.com",
+        subject="录用通知 Offer Letter",
+        body="请确认薪资待遇。",
+        snippet="录用通知",
+        is_seen=False,
+    )
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/messages/101/summary", json={"confirmed": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis_status"] == "analyzed"
+    assert payload["analysis_error"] == "privacy_sensitive"
+    assert payload["summary_zh"] == "录用通知 Offer Letter 按需摘要"
+    assert agent.summary_calls == ["uid:101"]
+    stored = store.get_mail_insight("uid:101")
+    assert stored is not None
+    assert stored.analysis_error == "privacy_sensitive"
 
 
 def test_web_risky_actions_require_confirmation(tmp_path):

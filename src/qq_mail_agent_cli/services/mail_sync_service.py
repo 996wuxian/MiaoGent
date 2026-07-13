@@ -10,8 +10,7 @@ from qq_mail_agent_cli.agent import MailAgent
 from qq_mail_agent_cli.desktop_events import EventSink, NullEventSink
 from qq_mail_agent_cli.mail_client import IncrementalMailBatch, MailClient
 from qq_mail_agent_cli.models import MailMessage
-from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
-from qq_mail_agent_cli.services.draft_service import DraftService
+from qq_mail_agent_cli.privacy import PrivacyConfig, classify_mail_title_privacy, privacy_error_code
 from qq_mail_agent_cli.storage import StateStore, StoredMailInsight, StoredStartupSummary
 
 
@@ -184,7 +183,7 @@ class MailSyncService:
             if analyzed_now:
                 processed_count += 1
             items.append(_item_from_insight(insight))
-            if insight.analysis_status != "analyzed":
+            if insight.analysis_status not in {"analyzed", "title_classified"}:
                 return
             if insight.confidence >= 0.55:
                 if insight.importance == "important":
@@ -401,7 +400,7 @@ class MailSyncService:
                 complete = existing is not None and (
                     _processing_complete(existing) or _privacy_review_recorded(existing)
                 )
-                if complete and existing is not None and _requires_privacy_reclassification(
+                if complete and existing is not None and _requires_title_privacy_update(
                     message,
                     existing,
                     self._privacy_config,
@@ -490,95 +489,17 @@ class MailSyncService:
         if not self._store.acquire_sync_lease(self._lease_owner):
             raise SyncAlreadyRunningError("邮件同步租约已丢失")
         failures: list[StartupSummaryFailure] = []
-        analyzed_now = False
-        privacy_verdict = should_block_ai(message, self._privacy_config)
-        if privacy_verdict.sensitive:
-            insight = self._record_privacy_review(
-                message,
-                uid_validity=uid_validity,
-                verdict=privacy_verdict,
-                trigger=trigger,
-            )
-            return (
-                insight,
-                False,
-                [
-                    StartupSummaryFailure(
-                        uid=message.id,
-                        stage="privacy",
-                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件发送给 DeepSeek",
-                    )
-                ],
-            )
-        body_over_limit = len(message.body) > self._MAX_AI_BODY_CHARS
-        if message.content_truncated or body_over_limit:
-            limit_reason = (
-                "邮件体积超过自动下载上限"
-                if message.content_truncated
-                else "邮件正文超过自动分析字符上限"
-            )
-            self._store.record_analysis_review_required(
-                message,
-                uid_validity=uid_validity,
-                mailbox=self._mailbox,
-                summary_zh=f"{limit_reason}，未发送给模型。",
-                reason="为控制内存、模型成本和截断误判风险，需要人工打开查看。",
-                error_code="message_too_large" if message.content_truncated else "body_too_long",
-            )
-            insight = self._store.get_mail_insight(
-                message.id,
-                uid_validity=uid_validity,
-                mailbox=self._mailbox,
-            )
-            assert insight is not None
-            self._emit_attention_required(insight, source=trigger)
-            return (
-                insight,
-                False,
-                [
-                    StartupSummaryFailure(
-                        uid=message.id,
-                        stage="oversized",
-                        error=f"MessageTooLarge: {limit_reason}，已转人工查看",
-                    )
-                ],
-            )
-        if existing is None or existing.analysis_status != "analyzed":
-            self._store.record_analysis_started(
-                message,
-                uid_validity=uid_validity,
-                mailbox=self._mailbox,
-            )
-            try:
-                result = self._agent.triage(message)
-                self._store.save_triage(
-                    message,
-                    result,
-                    model=self._model,
-                    uid_validity=uid_validity,
-                    mailbox=self._mailbox,
-                )
-                analyzed_now = True
-            except Exception as error:
-                self._store.record_analysis_failure(
-                    message,
-                    uid_validity=uid_validity,
-                    mailbox=self._mailbox,
-                    error=error,
-                )
-                failures.append(_failure(message.id, "analysis", error))
-                insight = self._store.get_mail_insight(
-                    message.id,
-                    uid_validity=uid_validity,
-                    mailbox=self._mailbox,
-                )
-                assert insight is not None
-                self._emit_attention_required(
-                    insight,
-                    analysis_failed=True,
-                    source=trigger,
-                )
-                return insight, False, failures
+        title_verdict = classify_mail_title_privacy(message.subject, self._privacy_config)
+        classifier = getattr(self._agent, "classify_title", None)
+        result = classifier(message) if callable(classifier) else MailAgent().classify_title(message)
+        self._store.save_title_classification(
+            message,
+            result,
+            model="title-rules",
+            uid_validity=uid_validity,
+            mailbox=self._mailbox,
+            analysis_error=privacy_error_code(title_verdict),
+        )
 
         insight = self._store.get_mail_insight(
             message.id,
@@ -612,66 +533,6 @@ class MailSyncService:
         ):
             self._emit_important(insight, source=trigger)
 
-        if insight.needs_reply and insight.reply_status not in {"draft_ready", "sent"}:
-            privacy_verdict = should_block_ai(message, self._privacy_config)
-            if privacy_verdict.sensitive:
-                insight = self._record_privacy_review(
-                    message,
-                    uid_validity=uid_validity,
-                    verdict=privacy_verdict,
-                    trigger=trigger,
-                )
-                failures.append(
-                    StartupSummaryFailure(
-                        uid=message.id,
-                        stage="privacy",
-                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件生成 DeepSeek 草稿",
-                    )
-                )
-                return insight, analyzed_now, failures
-            legacy_draft = self._store.get_latest_draft_for_uid(
-                message.id,
-                uid_validity=0,
-                mailbox=self._mailbox,
-            )
-            if legacy_draft is not None:
-                self._store.set_reply_status(
-                    message.id,
-                    "review_required",
-                    uid_validity=uid_validity,
-                    mailbox=self._mailbox,
-                )
-                failures.append(
-                    StartupSummaryFailure(
-                        uid=message.id,
-                        stage="legacy_draft",
-                        error="LegacyDraft: 已存在无法验证UIDVALIDITY的旧草稿，未自动重复生成",
-                    )
-                )
-            else:
-                try:
-                    draft = self._agent.draft_reply(message)
-                    stored_draft = DraftService(self._client, self._store).save_generated_draft(  # type: ignore[arg-type]
-                        draft,
-                        uid_validity=uid_validity,
-                        mailbox=self._mailbox,
-                    )
-                    self._store.set_reply_status(
-                        message.id,
-                        "draft_ready",
-                        uid_validity=uid_validity,
-                        mailbox=self._mailbox,
-                        draft_id=stored_draft.draft_id,
-                    )
-                except Exception as error:
-                    self._store.set_reply_status(
-                        message.id,
-                        "review_required",
-                        uid_validity=uid_validity,
-                        mailbox=self._mailbox,
-                    )
-                    failures.append(_failure(message.id, "draft", error))
-
         insight = self._store.get_mail_insight(
             message.id,
             uid_validity=uid_validity,
@@ -685,35 +546,9 @@ class MailSyncService:
                 uid_validity=uid_validity,
                 mailbox=self._mailbox,
             ),
-            analyzed_now,
+            True,
             failures,
         )
-
-    def _record_privacy_review(
-        self,
-        message: MailMessage,
-        *,
-        uid_validity: int,
-        verdict,
-        trigger: str,
-    ) -> StoredMailInsight:
-        summary_zh, reason, error_code = privacy_review_summary(verdict)
-        self._store.record_analysis_review_required(
-            message,
-            uid_validity=uid_validity,
-            mailbox=self._mailbox,
-            summary_zh=summary_zh,
-            reason=reason,
-            error_code=error_code,
-        )
-        insight = self._store.get_mail_insight(
-            message.id,
-            uid_validity=uid_validity,
-            mailbox=self._mailbox,
-        )
-        assert insight is not None
-        self._emit_attention_required(insight, source=trigger)
-        return insight
 
     def _emit_important(
         self,
@@ -803,9 +638,15 @@ def _numeric_uid(mail_id: str) -> int | None:
 
 
 def _processing_complete(insight: StoredMailInsight) -> bool:
-    if insight.analysis_status != "analyzed":
+    if insight.analysis_status not in {"analyzed", "title_classified"}:
         return False
-    if insight.needs_reply and insight.reply_status not in {"draft_ready", "sent"}:
+    if insight.analysis_status == "title_classified":
+        return True
+    if (
+        insight.analysis_status == "analyzed"
+        and insight.needs_reply
+        and insight.reply_status not in {"draft_ready", "sent"}
+    ):
         return False
     if insight.confidence < 0.55:
         return insight.notification_status in {"attention_emitted", "notified"}
@@ -818,18 +659,15 @@ def _processing_complete(insight: StoredMailInsight) -> bool:
 
 def _privacy_review_recorded(insight: StoredMailInsight) -> bool:
     return (
-        insight.analysis_error == "privacy_sensitive"
-        and insight.analysis_status == "review_required"
-        and insight.reply_status == "review_required"
+        insight.analysis_error in {"privacy_sensitive", "privacy_private"}
+        and insight.analysis_status in {"title_classified", "analyzed", "review_required"}
     )
 
 
-def _requires_privacy_reclassification(message: MailMessage, insight: StoredMailInsight, config) -> bool:
-    if insight.analysis_error == "privacy_sensitive":
+def _requires_title_privacy_update(message: MailMessage, insight: StoredMailInsight, config: PrivacyConfig) -> bool:
+    if insight.analysis_error in {"privacy_sensitive", "privacy_private"}:
         return False
-    if insight.analysis_status != "analyzed":
-        return False
-    return should_block_ai(message, config).sensitive
+    return classify_mail_title_privacy(message.subject, config).sensitive
 
 
 def _failure(uid: str, stage: str, error: Exception) -> StartupSummaryFailure:

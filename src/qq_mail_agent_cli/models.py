@@ -66,6 +66,15 @@ class TriageResult:
 
 
 @dataclass(frozen=True)
+class MailSummary:
+    mail_id: str
+    summary_zh: str
+    action_items: tuple[str, ...] = ()
+    confidence: float = 0.5
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class Draft:
     id: str
     mail_id: str

@@ -115,6 +115,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirmed: true }),
     }),
+  generateSummary: (uid: string, confirmed = false) =>
+    request<MailInsight>(`/api/messages/${encodeURIComponent(uid)}/summary`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmed }),
+    }),
   markSeen: (uid: string, signal?: AbortSignal) =>
     request<{ ok: boolean; detail: string }>(`/api/messages/${encodeURIComponent(uid)}/mark-seen`, {
       method: 'POST',

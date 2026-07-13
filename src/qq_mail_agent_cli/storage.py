@@ -10,7 +10,7 @@ from collections.abc import Iterator
 import time
 from uuid import uuid4
 
-from qq_mail_agent_cli.models import Draft, MailClassification, MailImportance, MailMessage, TriageResult
+from qq_mail_agent_cli.models import Draft, MailClassification, MailImportance, MailMessage, MailSummary, TriageResult
 
 
 @dataclass(frozen=True)
@@ -397,6 +397,226 @@ class StateStore:
                 (mail_key, message.id, mailbox, uid_validity, now, now),
             )
 
+    def save_title_classification(
+        self,
+        message: MailMessage,
+        result: TriageResult,
+        *,
+        model: str,
+        uid_validity: int,
+        mailbox: str = "INBOX",
+        analysis_error: str | None = None,
+    ) -> None:
+        self.upsert_mail(message, uid_validity=uid_validity, mailbox=mailbox)
+        now = _now()
+        mail_key = _mail_key(mailbox, uid_validity, message.id)
+        importance, needs_reply = _effective_insight(result)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO triage_results(
+                    uid,
+                    classification,
+                    reason,
+                    suggested_action,
+                    action_reason,
+                    mailbox,
+                    source_uidvalidity,
+                    model,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uid) DO UPDATE SET
+                    classification=excluded.classification,
+                    reason=excluded.reason,
+                    suggested_action=excluded.suggested_action,
+                    action_reason=excluded.action_reason,
+                    mailbox=excluded.mailbox,
+                    source_uidvalidity=excluded.source_uidvalidity,
+                    model=excluded.model,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    message.id,
+                    result.classification.value,
+                    result.reason,
+                    result.suggested_action.value,
+                    result.action_reason,
+                    mailbox,
+                    uid_validity,
+                    model,
+                    now,
+                    now,
+                ),
+            )
+            previous = conn.execute(
+                """
+                SELECT reply_status, notification_status, draft_id
+                FROM mail_insights
+                WHERE mail_key = ?
+                """,
+                (mail_key,),
+            ).fetchone()
+            previous_reply = previous[0] if previous else None
+            previous_notification = previous[1] if previous else None
+            previous_draft_id = previous[2] if previous else None
+            if not needs_reply:
+                reply_status = "not_needed"
+            elif previous_reply in {"draft_ready", "sent"}:
+                reply_status = previous_reply
+            else:
+                reply_status = "needs_reply"
+            if importance == MailImportance.GENERAL:
+                notification_status = "not_required"
+            elif previous_notification in {"event_emitted", "notified"}:
+                notification_status = previous_notification
+            else:
+                notification_status = "pending"
+            conn.execute(
+                """
+                INSERT INTO mail_insights(
+                    mail_key,
+                    uid,
+                    mailbox,
+                    source_uidvalidity,
+                    importance,
+                    needs_reply,
+                    summary_zh,
+                    action_items_json,
+                    confidence,
+                    priority_reason,
+                    analysis_status,
+                    reply_status,
+                    notification_status,
+                    analysis_error,
+                    draft_id,
+                    analyzed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?, ?, 'title_classified', ?, ?, ?, ?, NULL, ?, ?)
+                ON CONFLICT(mail_key) DO UPDATE SET
+                    importance=excluded.importance,
+                    needs_reply=excluded.needs_reply,
+                    summary_zh=mail_insights.summary_zh,
+                    action_items_json=mail_insights.action_items_json,
+                    confidence=CASE
+                        WHEN mail_insights.summary_zh != '' THEN mail_insights.confidence
+                        ELSE excluded.confidence
+                    END,
+                    priority_reason=excluded.priority_reason,
+                    analysis_status=CASE
+                        WHEN mail_insights.summary_zh != '' AND mail_insights.analysis_status = 'analyzed'
+                        THEN mail_insights.analysis_status
+                        ELSE 'title_classified'
+                    END,
+                    reply_status=excluded.reply_status,
+                    notification_status=excluded.notification_status,
+                    analysis_error=excluded.analysis_error,
+                    draft_id=COALESCE(mail_insights.draft_id, excluded.draft_id),
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    mail_key,
+                    message.id,
+                    mailbox,
+                    uid_validity,
+                    importance.value,
+                    _bool_to_int(needs_reply),
+                    _clamp_confidence(result.confidence),
+                    result.priority_reason or result.reason,
+                    reply_status,
+                    notification_status,
+                    analysis_error,
+                    previous_draft_id,
+                    now,
+                    now,
+                ),
+            )
+
+    def record_generated_summary(
+        self,
+        message: MailMessage,
+        summary: MailSummary,
+        *,
+        uid_validity: int = 0,
+        mailbox: str = "INBOX",
+    ) -> StoredMailInsight:
+        self.upsert_mail(message, uid_validity=uid_validity, mailbox=mailbox)
+        now = _now()
+        mail_key = _mail_key(mailbox, uid_validity, message.id)
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT importance, needs_reply, reply_status, notification_status, analysis_error, draft_id
+                FROM mail_insights
+                WHERE mail_key = ?
+                """,
+                (mail_key,),
+            ).fetchone()
+            importance = str(existing[0]) if existing else MailImportance.GENERAL.value
+            needs_reply = int(existing[1]) if existing else 0
+            reply_status = str(existing[2]) if existing else "not_needed"
+            notification_status = str(existing[3]) if existing else "not_required"
+            analysis_error = existing[4] if existing and isinstance(existing[4], str) else None
+            draft_id = existing[5] if existing and isinstance(existing[5], str) else None
+            conn.execute(
+                """
+                INSERT INTO mail_insights(
+                    mail_key,
+                    uid,
+                    mailbox,
+                    source_uidvalidity,
+                    importance,
+                    needs_reply,
+                    summary_zh,
+                    action_items_json,
+                    confidence,
+                    priority_reason,
+                    analysis_status,
+                    reply_status,
+                    notification_status,
+                    analysis_error,
+                    draft_id,
+                    analyzed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed', ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(mail_key) DO UPDATE SET
+                    summary_zh=excluded.summary_zh,
+                    action_items_json=excluded.action_items_json,
+                    confidence=excluded.confidence,
+                    priority_reason=excluded.priority_reason,
+                    analysis_status='analyzed',
+                    analyzed_at=excluded.analyzed_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    mail_key,
+                    message.id,
+                    mailbox,
+                    uid_validity,
+                    importance,
+                    needs_reply,
+                    summary.summary_zh,
+                    json.dumps(list(summary.action_items), ensure_ascii=False),
+                    _clamp_confidence(summary.confidence),
+                    summary.reason,
+                    reply_status,
+                    notification_status,
+                    analysis_error,
+                    draft_id,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        insight = self.get_mail_insight(message.id, uid_validity=uid_validity, mailbox=mailbox)
+        assert insight is not None
+        return insight
+
     def record_analysis_failure(
         self,
         message: MailMessage,
@@ -628,7 +848,7 @@ class StateStore:
                 {self._insight_select_sql()}
                 WHERE i.source_uidvalidity = ?
                   AND i.mailbox = ?
-                  AND i.analysis_status = 'analyzed'
+                  AND i.analysis_status IN ('analyzed', 'title_classified')
                   AND i.confidence >= 0.55
                   AND i.importance IN ('important', 'urgent')
                   AND i.notification_status IN ({placeholders})

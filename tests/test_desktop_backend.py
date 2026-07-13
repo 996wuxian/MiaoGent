@@ -412,7 +412,10 @@ def test_uidvalidity_reset_background_draft_never_attaches_to_old_generation(tmp
     old = store.get_mail_insight("uid:9", uid_validity=100)
     current = store.get_mail_insight("uid:9", uid_validity=101)
     assert old is not None and old.draft_id is None
-    assert current is not None and current.draft_id is not None
+    assert current is not None
+    assert current.source_uidvalidity == 101
+    assert current.draft_id is None
+    assert current.reply_status == "needs_reply"
 
 
 def test_draft_version_history_does_not_cross_uidvalidity_generations(tmp_path):
@@ -457,10 +460,10 @@ def test_legacy_sent_draft_blocks_automatic_duplicate_after_first_desktop_baseli
     summary = MailSyncService(client, agent, store).sync_startup()  # type: ignore[arg-type]
 
     insight = store.get_mail_insight("uid:9", uid_validity=101)
-    assert insight is not None and insight.reply_status == "review_required"
+    assert insight is not None and insight.reply_status == "needs_reply"
     assert agent.drafted == []
     assert len(store.list_drafts(status="all")) == 1
-    assert any(failure.stage == "legacy_draft" for failure in summary.failures)
+    assert summary.failures == ()
 
 
 class FakeImapConnection:
@@ -630,6 +633,12 @@ class FakeInsightAgent:
             raise result
         return result
 
+    def classify_title(self, message):
+        result = self.results.get(message.id)
+        if isinstance(result, Exception) or result is None:
+            return MailAgent().classify_title(message)
+        return result
+
     def draft_reply(self, message):
         self.drafted.append(message.id)
         return Draft(
@@ -642,7 +651,7 @@ class FakeInsightAgent:
         )
 
 
-def test_startup_sync_auto_drafts_reply_mail_emits_only_important_and_is_idempotent(tmp_path):
+def test_startup_sync_title_classifies_reply_mail_emits_only_important_and_is_idempotent(tmp_path):
     messages = (_message(1), _message(2), _message(3))
     client = FakeIncrementalClient(
         [
@@ -668,13 +677,14 @@ def test_startup_sync_auto_drafts_reply_mail_emits_only_important_and_is_idempot
     assert summary.important_count == 1
     assert summary.urgent_count == 1
     assert summary.reply_count == 1
-    assert summary.draft_ready_count == 1
+    assert summary.draft_ready_count == 0
     assert summary.general_count == 1
     assert summary.failed_count == 0
     assert repeated.processed_count == 0
-    assert agent.drafted == ["uid:2"]
+    assert agent.triaged == []
+    assert agent.drafted == []
     assert client.sent == []
-    assert len(store.list_drafts(status="all")) == 1
+    assert len(store.list_drafts(status="all")) == 0
     important_events = [event for event in events.events if event.name == "important_mail"]
     assert [event.payload["uid"] for event in important_events] == ["uid:2", "uid:3"]
     assert {event.payload["importance"] for event in important_events} == {"important", "urgent"}
@@ -683,10 +693,10 @@ def test_startup_sync_auto_drafts_reply_mail_emits_only_important_and_is_idempot
     assert not [event for event in events.events if event.name == "attention_required"]
     startup_events = [event for event in events.events if event.name == "startup_summary"]
     assert len(startup_events) == 1
-    assert startup_events[0].payload["draft_ready_count"] == 1
+    assert startup_events[0].payload["draft_ready_count"] == 0
 
 
-def test_startup_sync_blocks_sensitive_mail_before_ai_and_marks_review_required(tmp_path):
+def test_startup_sync_marks_sensitive_title_without_ai_or_body_summary(tmp_path):
     message = _message(40, subject="Offer Letter", body="请查看附件中的入职录用通知书")
     client = FakeIncrementalClient(
         [IncrementalMailBatch(uid_validity=9, messages=(message,), has_more=False)]
@@ -698,20 +708,17 @@ def test_startup_sync_blocks_sensitive_mail_before_ai_and_marks_review_required(
     summary = MailSyncService(client, agent, store, event_sink=events).sync_startup()  # type: ignore[arg-type]
 
     assert summary.new_count == 1
-    assert summary.processed_count == 0
-    assert summary.failed_count == 1
-    assert summary.failures[0].stage == "privacy"
+    assert summary.processed_count == 1
+    assert summary.failed_count == 0
     assert agent.triaged == []
     assert agent.drafted == []
     insight = store.get_mail_insight("uid:40", uid_validity=9)
     assert insight is not None
-    assert insight.analysis_status == "review_required"
-    assert insight.reply_status == "review_required"
-    assert insight.notification_status == "attention_emitted"
-    assert "阻止发送给 DeepSeek" in insight.summary_zh
+    assert insight.analysis_status == "title_classified"
+    assert insight.analysis_error == "privacy_sensitive"
+    assert insight.summary_zh == ""
     attention = [event for event in events.events if event.name == "attention_required"]
-    assert len(attention) == 1
-    assert attention[0].payload["uid"] == "uid:40"
+    assert attention == []
 
 
 def test_startup_sync_reclassifies_existing_sensitive_insight_without_ai(tmp_path):
@@ -736,19 +743,16 @@ def test_startup_sync_reclassifies_existing_sensitive_insight_without_ai(tmp_pat
     summary = MailSyncService(client, agent, store, event_sink=events).sync_startup()  # type: ignore[arg-type]
 
     assert summary.new_count == 1
-    assert summary.failed_count == 1
-    assert summary.failures[0].stage == "privacy"
+    assert summary.failed_count == 0
     assert agent.triaged == []
     assert agent.drafted == []
     insight = store.get_mail_insight("uid:41", uid_validity=9)
     assert insight is not None
-    assert insight.analysis_status == "review_required"
+    assert insight.analysis_status == "analyzed"
     assert insight.analysis_error == "privacy_sensitive"
-    assert insight.reply_status == "review_required"
-    assert "隐私保护模式" in insight.summary_zh
+    assert insight.summary_zh
     attention = [event for event in events.events if event.name == "attention_required"]
-    assert len(attention) == 1
-    assert attention[0].payload["uid"] == "uid:41"
+    assert attention == []
 
 
 def test_unacknowledged_important_event_replays_on_restart_and_ack_is_monotonic(tmp_path):
@@ -864,18 +868,16 @@ def test_sync_isolates_single_mail_failure_and_persists_safe_review_state(tmp_pa
     summary = MailSyncService(client, agent, store, event_sink=events).sync_startup()  # type: ignore[arg-type]
 
     assert summary.new_count == 2
-    assert summary.processed_count == 1
-    assert summary.failed_count == 1
+    assert summary.processed_count == 2
+    assert summary.failed_count == 0
     failed = store.get_mail_insight("uid:10")
     assert failed is not None
-    assert failed.analysis_status == "failed"
-    assert failed.reply_status == "review_required"
-    assert failed.notification_status == "attention_emitted"
+    assert failed.analysis_status == "title_classified"
+    assert failed.reply_status == "not_needed"
     assert "private body" not in (failed.analysis_error or "")
     assert store.get_sync_state("INBOX").last_processed_uid == 11
     attention = [event for event in events.events if event.name == "attention_required"]
-    assert attention[0].payload["analysis_failed"] is True
-    assert "private body" not in json.dumps(attention[0].payload, ensure_ascii=False)
+    assert attention == []
 
 
 def test_fetch_failure_does_not_advance_cursor_past_the_missing_uid(tmp_path):
@@ -989,7 +991,7 @@ def test_startup_retries_persisted_failed_analysis_from_same_uidvalidity(tmp_pat
     summary = MailSyncService(client, agent, store).sync_startup()  # type: ignore[arg-type]
 
     recovered = store.get_mail_insight("uid:20", uid_validity=5)
-    assert recovered is not None and recovered.analysis_status == "analyzed"
+    assert recovered is not None and recovered.analysis_status == "title_classified"
     assert summary.processed_count == 1
     assert summary.failed_count == 0
 
@@ -1036,13 +1038,13 @@ def test_oversized_mail_is_persisted_for_review_without_calling_agent_or_draftin
 
     insight = store.get_mail_insight("uid:13", uid_validity=5)
     assert insight is not None
-    assert insight.analysis_status == "review_required"
-    assert insight.reply_status == "review_required"
+    assert insight.analysis_status == "title_classified"
+    assert insight.reply_status == "not_needed"
     assert agent.triaged == []
     assert agent.drafted == []
     assert store.list_drafts(status="all") == []
-    assert summary.failed_count == 1
-    assert len([event for event in events.events if event.name == "attention_required"]) == 1
+    assert summary.failed_count == 0
+    assert [event for event in events.events if event.name == "attention_required"] == []
 
 
 def test_long_text_below_mime_limit_is_not_partially_analyzed_or_auto_drafted(tmp_path):
@@ -1056,8 +1058,8 @@ def test_long_text_below_mime_limit_is_not_partially_analyzed_or_auto_drafted(tm
     MailSyncService(client, agent, store).sync_startup()  # type: ignore[arg-type]
 
     insight = store.get_mail_insight("uid:14", uid_validity=5)
-    assert insight is not None and insight.analysis_status == "review_required"
-    assert insight.analysis_error == "body_too_long"
+    assert insight is not None and insight.analysis_status == "title_classified"
+    assert insight.analysis_error is None
     assert agent.triaged == [] and agent.drafted == []
 
 

@@ -31,7 +31,13 @@ from qq_mail_agent_cli.health import (
 )
 from qq_mail_agent_cli.llm_client import DeepSeekClient
 from qq_mail_agent_cli.mail_client import MailClient
-from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
+from qq_mail_agent_cli.privacy import (
+    PrivacyConfig,
+    classify_mail_title_privacy,
+    privacy_error_code,
+    privacy_review_summary,
+    should_block_ai,
+)
 from qq_mail_agent_cli.services import (
     DraftConflictError,
     DraftNotFoundError,
@@ -564,6 +570,54 @@ def create_app(
         store.upsert_mail(message)
         store.log_action("translate", uid=message.id, detail="Translated from web UI; translation body not persisted")
         return translation_to_response(translation)
+
+    @app.post("/api/messages/{uid}/summary", response_model=MailInsightResponse)
+    def summarize_message(
+        uid: str,
+        request: ConfirmRequest,
+        client: Annotated[MailClient, Depends(_get_mail_client)],
+        agent: Annotated[MailAgent, Depends(_get_agent)],
+        store: Annotated[StateStore, Depends(_get_state_store)],
+    ):
+        message = _get_message_or_404(client, uid)
+        verdict = classify_mail_title_privacy(message.subject, app.state.privacy_config_factory())
+        if verdict.sensitive and not request.confirmed:
+            raise HTTPException(
+                status_code=409,
+                detail="该邮件标题疑似敏感或隐私。生成摘要会把正文发送给 AI，请二次确认。",
+            )
+        insight = store.get_mail_insight(_normalize_uid_for_store(uid))
+        mailbox = insight.mailbox if insight is not None else "INBOX"
+        uid_validity = insight.source_uidvalidity if insight is not None else 0
+        if insight is None or (verdict.sensitive and insight.analysis_error is None):
+            store.save_title_classification(
+                message,
+                agent.classify_title(message),
+                model="title-rules",
+                uid_validity=uid_validity,
+                mailbox=mailbox,
+                analysis_error=privacy_error_code(verdict),
+            )
+            insight = store.get_mail_insight(message.id, uid_validity=uid_validity, mailbox=mailbox)
+            assert insight is not None
+        summary = agent.summarize_message(message)
+        updated = store.record_generated_summary(
+            message,
+            summary,
+            uid_validity=uid_validity,
+            mailbox=mailbox,
+        )
+        store.log_action(
+            "generate_summary",
+            uid=message.id,
+            detail=(
+                "Generated AI summary after explicit sensitive/private confirmation"
+                if verdict.sensitive
+                else "Generated AI summary on demand"
+            ),
+        )
+        feedback = store.get_latest_mail_insight_feedback_by_mail_key(updated.mail_key)
+        return mail_insight_to_response(updated, feedback)
 
     @app.post("/api/messages/{uid}/draft", response_model=DraftResponse)
     def draft_message(
