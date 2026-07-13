@@ -898,6 +898,86 @@ describe('MiaoGent workbench', () => {
     expect(within(panel as HTMLElement).getAllByText('敏感').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('旧洞察未写入隐私错误时也会按敏感主题显示敏感标记', async () => {
+    const legacyInsight = insight({
+      uid: 'uid:10',
+      subject: '录用通知书-云宏信息',
+      importance: 'important',
+      needs_reply: true,
+      reply_status: 'draft_ready',
+      summary_zh: '已生成录用沟通草稿。',
+      priority_reason: '对方需要确认。',
+      analysis_status: 'analyzed',
+      analysis_error: null,
+    });
+    installFetch({
+      recent: [message('uid:10', '录用通知书-云宏信息', true)],
+      handler: (url) => {
+        if (url.startsWith('/api/insights?')) return jsonResponse([legacyInsight]);
+        if (url === '/api/insights/uid%3A10') return jsonResponse(legacyInsight);
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '全部' }));
+    const card = (await screen.findByText('录用通知书-云宏信息')).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByText('敏感')).toBeInTheDocument();
+
+    await user.click(within(card as HTMLElement).getByRole('button', { name: /录用通知书-云宏信息/ }));
+    const badges = document.querySelector('.message-badges') as HTMLElement;
+    expect(within(badges).getByText('敏感')).toBeInTheDocument();
+  });
+
+  it('详情顶部折叠队列和洞察的重复待回复标签', async () => {
+    const replyInsight = insight({
+      uid: 'uid:10',
+      subject: '需要回复的合作邮件',
+      importance: 'important',
+      needs_reply: true,
+      reply_status: 'needs_reply',
+    });
+    installFetch({
+      recent: [message('uid:10', '需要回复的合作邮件', true)],
+      handler: (url) => {
+        if (url.startsWith('/api/insights?')) return jsonResponse([replyInsight]);
+        if (url === '/api/insights/uid%3A10') return jsonResponse(replyInsight);
+        if (url.startsWith('/api/triage/queue')) {
+          return jsonResponse([
+            {
+              uid: 'uid:10',
+              sender: 'partner@example.com',
+              subject: '需要回复的合作邮件',
+              date: '2026-07-10',
+              is_seen: true,
+              classification: 'respond',
+              suggested_action: 'draft_reply',
+              queue_status: 'pending',
+              reason: '需要回复',
+              action_reason: '生成回复草稿',
+              updated_at: '2026-07-10',
+            },
+          ]);
+        }
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '全部' }));
+    await user.click(await screen.findByText('需要回复的合作邮件'));
+    const badges = document.querySelector('.message-badges') as HTMLElement;
+    expect(within(badges).getByText('已读')).toBeInTheDocument();
+    expect(within(badges).getByText('重要')).toBeInTheDocument();
+    expect(within(badges).getByText('待回复')).toBeInTheDocument();
+    expect(within(badges).queryByText('待处理')).not.toBeInTheDocument();
+    expect(within(badges).queryByText('需回复')).not.toBeInTheDocument();
+    expect(within(badges).queryByText('需要回复')).not.toBeInTheDocument();
+  });
+
   it('快速切换时只展示并自动标记最终有效选择', async () => {
     const detailA = deferred<Response>();
     const detailB = deferred<Response>();

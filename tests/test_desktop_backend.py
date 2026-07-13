@@ -714,6 +714,43 @@ def test_startup_sync_blocks_sensitive_mail_before_ai_and_marks_review_required(
     assert attention[0].payload["uid"] == "uid:40"
 
 
+def test_startup_sync_reclassifies_existing_sensitive_insight_without_ai(tmp_path):
+    message = _message(41, subject="录用通知书-云宏信息", body="请确认入职安排")
+    store = StateStore(tmp_path / "state.sqlite3")
+    store.save_triage(
+        message,
+        _result(41, importance=MailImportance.GENERAL),
+        model="legacy-model",
+        uid_validity=9,
+    )
+    existing = store.get_mail_insight("uid:41", uid_validity=9)
+    assert existing is not None
+    assert existing.analysis_status == "analyzed"
+    assert existing.analysis_error is None
+    client = FakeIncrementalClient(
+        [IncrementalMailBatch(uid_validity=9, messages=(message,), has_more=False)]
+    )
+    agent = FakeInsightAgent({})
+    events = RecordingEventSink()
+
+    summary = MailSyncService(client, agent, store, event_sink=events).sync_startup()  # type: ignore[arg-type]
+
+    assert summary.new_count == 1
+    assert summary.failed_count == 1
+    assert summary.failures[0].stage == "privacy"
+    assert agent.triaged == []
+    assert agent.drafted == []
+    insight = store.get_mail_insight("uid:41", uid_validity=9)
+    assert insight is not None
+    assert insight.analysis_status == "review_required"
+    assert insight.analysis_error == "privacy_sensitive"
+    assert insight.reply_status == "review_required"
+    assert "隐私保护模式" in insight.summary_zh
+    attention = [event for event in events.events if event.name == "attention_required"]
+    assert len(attention) == 1
+    assert attention[0].payload["uid"] == "uid:41"
+
+
 def test_unacknowledged_important_event_replays_on_restart_and_ack_is_monotonic(tmp_path):
     message = _message(30)
     store = StateStore(tmp_path / "state.sqlite3")

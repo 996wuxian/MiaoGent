@@ -398,7 +398,15 @@ class MailSyncService:
                     uid_validity=batch.uid_validity,
                     mailbox=self._mailbox,
                 )
-                complete = existing is not None and _processing_complete(existing)
+                complete = existing is not None and (
+                    _processing_complete(existing) or _privacy_review_recorded(existing)
+                )
+                if complete and existing is not None and _requires_privacy_reclassification(
+                    message,
+                    existing,
+                    self._privacy_config,
+                ):
+                    complete = False
                 if not complete:
                     new_count += 1
                     insight, analyzed_now, item_failures = self._process_message(
@@ -806,6 +814,22 @@ def _processing_complete(insight: StoredMailInsight) -> bool:
     }:
         return False
     return True
+
+
+def _privacy_review_recorded(insight: StoredMailInsight) -> bool:
+    return (
+        insight.analysis_error == "privacy_sensitive"
+        and insight.analysis_status == "review_required"
+        and insight.reply_status == "review_required"
+    )
+
+
+def _requires_privacy_reclassification(message: MailMessage, insight: StoredMailInsight, config) -> bool:
+    if insight.analysis_error == "privacy_sensitive":
+        return False
+    if insight.analysis_status != "analyzed":
+        return False
+    return should_block_ai(message, config).sensitive
 
 
 def _failure(uid: str, stage: str, error: Exception) -> StartupSummaryFailure:

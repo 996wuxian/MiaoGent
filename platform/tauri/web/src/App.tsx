@@ -115,6 +115,11 @@ type FeedbackOptions = {
   actionLabel?: string;
   onAction?: () => void;
 };
+type BadgeView = {
+  key: string;
+  label: string;
+  tone?: BadgeTone;
+};
 
 type SearchFilters = {
   keyword: string;
@@ -1374,6 +1379,10 @@ function App() {
     selectedInsight.data &&
       (selectedInsight.data.analysis_status !== 'analyzed' || selectedInsight.data.confidence < 0.55),
   );
+  const selectedDetailBadges = useMemo(
+    () => buildDetailBadges(selectedDetail, selectedInsight.data, selectedInsightRequiresReview),
+    [selectedDetail, selectedInsight.data, selectedInsightRequiresReview],
+  );
 
   useEffect(() => {
     ensureSelectedMailVisible();
@@ -1560,17 +1569,9 @@ function App() {
           <LoadingLine active={detail.loading} />
           <div className="message-head">
             <div className="message-badges">
-              {selectedDetail && <Badge tone={selectedDetail.is_seen ? 'neutral' : 'warning'}>{selectedDetail.is_seen ? '已读' : '未读'}</Badge>}
-              {selectedQueue && <Badge tone="info">{queueLabel[selectedQueue.queue_status] ?? selectedQueue.queue_status}</Badge>}
-              {selectedQueue?.classification && <Badge tone={classificationTone(selectedQueue.classification)}>{classificationLabel[selectedQueue.classification] ?? selectedQueue.classification}</Badge>}
-              {isSensitiveMail(selectedInsight.data) && <Badge tone="danger">敏感</Badge>}
-              {selectedInsight.data && (selectedInsightRequiresReview ? (
-                <Badge tone="warning">待人工查看</Badge>
-              ) : (
-                <Badge tone={importanceTone(selectedInsight.data.importance)}>{importanceLabel[selectedInsight.data.importance] ?? selectedInsight.data.importance}</Badge>
+              {selectedDetailBadges.map((badge) => (
+                <Badge key={badge.key} tone={badge.tone}>{badge.label}</Badge>
               ))}
-              {selectedInsight.data?.needs_reply && !['sent', 'not_needed'].includes(selectedInsight.data.reply_status) && <Badge tone="info">需要回复</Badge>}
-              {selectedInsight.data?.reply_status === 'sent' && <Badge tone="success">已回复</Badge>}
             </div>
             <h2>{selectedDetail?.subject ?? (detail.loading ? '正在读取邮件…' : '请选择邮件')}</h2>
             {selectedDetail && (
@@ -1868,9 +1869,12 @@ function MailListCard({
   );
   const sensitive = isSensitiveMail({
     analysis_error: item.analysisError,
+    subject: item.subject,
+    sender: item.sender,
     summary_zh: item.summary,
     priority_reason: item.reason,
   });
+  const badges = buildListBadges(item, requiresReview, sensitive, pending);
   return (
     <article
       className={`mail-card ${selected ? 'is-active' : ''} ${item.isSeen === false ? 'is-unread' : ''}`}
@@ -1886,16 +1890,9 @@ function MailListCard({
         <div className="mail-meta-row">
           <div className="mail-meta">{formatMailDate(item.date) || item.uid}</div>
           <div className="queue-tags">
-            {item.classification && <Badge tone={classificationTone(item.classification)}>{classificationLabel[item.classification] ?? item.classification}</Badge>}
-            {item.importance && !requiresReview && <Badge tone={importanceTone(item.importance)}>{importanceLabel[item.importance] ?? item.importance}</Badge>}
-            {item.needsReply && !['sent', 'not_needed'].includes(item.replyStatus ?? '') && <Badge tone="info">待回复</Badge>}
-            {item.replyStatus === 'sent' && <Badge tone="success">已回复</Badge>}
-            {sensitive && <Badge tone="danger">敏感</Badge>}
-            {requiresReview && <Badge tone="warning">待人工查看</Badge>}
-            {item.draftId && item.replyStatus === 'draft_ready' && <Badge tone="success">草稿就绪</Badge>}
-            {item.suggestedAction && <Badge tone="info">{actionLabel[item.suggestedAction] ?? item.suggestedAction}</Badge>}
-            {item.queueStatus && <Badge>{queueLabel[item.queueStatus] ?? item.queueStatus}</Badge>}
-            {pending && <Badge tone="info">读取中</Badge>}
+            {badges.map((badge) => (
+              <Badge key={badge.key} tone={badge.tone}>{badge.label}</Badge>
+            ))}
           </div>
         </div>
       </button>
@@ -2116,6 +2113,100 @@ function ActionButton({ icon, label, onClick, danger, disabled }: { icon: IconNa
 
 function SmallButton({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
   return <button className="btn mini-button" onClick={onClick} disabled={disabled}>{label}</button>;
+}
+
+function buildDetailBadges(
+  detail: MailMessage | null,
+  insight: MailInsight | null,
+  requiresReview: boolean,
+): BadgeView[] {
+  const badges: BadgeView[] = [];
+  if (detail) {
+    badges.push({
+      key: 'read-state',
+      label: detail.is_seen ? '已读' : '未读',
+      tone: detail.is_seen ? 'neutral' : 'warning',
+    });
+  }
+  const sensitive = isSensitiveMail({
+    analysis_error: insight?.analysis_error,
+    subject: insight?.subject ?? detail?.subject,
+    sender: insight?.sender ?? detail?.sender,
+    summary_zh: insight?.summary_zh,
+    priority_reason: insight?.priority_reason,
+  });
+  if (sensitive) badges.push({ key: 'sensitive', label: '敏感', tone: 'danger' });
+  if (!insight) return badges;
+  if (requiresReview) {
+    badges.push({ key: 'review', label: '待人工查看', tone: 'warning' });
+  } else {
+    badges.push({
+      key: 'importance',
+      label: importanceLabel[insight.importance] ?? insight.importance,
+      tone: importanceTone(insight.importance),
+    });
+  }
+  if (insight.reply_status === 'sent') {
+    badges.push({ key: 'reply-sent', label: '已回复', tone: 'success' });
+  } else if (insight.reply_status === 'draft_ready') {
+    badges.push({ key: 'draft-ready', label: '草稿就绪', tone: 'success' });
+  } else if (insight.needs_reply && !['not_needed'].includes(insight.reply_status)) {
+    badges.push({ key: 'reply-needed', label: '待回复', tone: 'info' });
+  }
+  return badges;
+}
+
+function buildListBadges(
+  item: ListItem,
+  requiresReview: boolean,
+  sensitive: boolean,
+  pending: boolean,
+): BadgeView[] {
+  const badges: BadgeView[] = [];
+  const draftReady = Boolean(item.draftId && item.replyStatus === 'draft_ready');
+  const replyPending = Boolean(
+    item.needsReply && !['sent', 'not_needed', 'draft_ready'].includes(item.replyStatus ?? ''),
+  );
+  if (sensitive) badges.push({ key: 'sensitive', label: '敏感', tone: 'danger' });
+  if (requiresReview) {
+    badges.push({ key: 'review', label: '待人工查看', tone: 'warning' });
+  } else if (item.importance) {
+    badges.push({
+      key: 'importance',
+      label: importanceLabel[item.importance] ?? item.importance,
+      tone: importanceTone(item.importance),
+    });
+  }
+  if (item.replyStatus === 'sent') {
+    badges.push({ key: 'reply-sent', label: '已回复', tone: 'success' });
+  } else if (draftReady) {
+    badges.push({ key: 'draft-ready', label: '草稿就绪', tone: 'success' });
+  } else if (replyPending) {
+    badges.push({ key: 'reply-needed', label: '待回复', tone: 'info' });
+  }
+  if (item.classification && !(item.classification === 'respond' && (replyPending || draftReady))) {
+    badges.push({
+      key: 'classification',
+      label: classificationLabel[item.classification] ?? item.classification,
+      tone: classificationTone(item.classification),
+    });
+  }
+  if (item.suggestedAction && !(item.suggestedAction === 'draft_reply' && (replyPending || draftReady))) {
+    badges.push({
+      key: 'action',
+      label: actionLabel[item.suggestedAction] ?? item.suggestedAction,
+      tone: 'info',
+    });
+  }
+  if (item.queueStatus && item.queueStatus !== 'pending') {
+    badges.push({
+      key: 'queue',
+      label: queueLabel[item.queueStatus] ?? item.queueStatus,
+      tone: 'neutral',
+    });
+  }
+  if (pending) badges.push({ key: 'loading', label: '读取中', tone: 'info' });
+  return badges;
 }
 
 function classificationTone(classification: string): BadgeTone {
