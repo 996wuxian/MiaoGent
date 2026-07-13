@@ -2,6 +2,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from qq_mail_agent_cli.privacy import PrivacyConfig
+
 
 @dataclass(frozen=True)
 class MailConfig:
@@ -112,6 +114,16 @@ def load_app_config() -> AppConfig:
     return AppConfig(db_path=Path(os.getenv("QQ_MAIL_AGENT_DB_PATH", ".mail_agent_state/state.sqlite3")))
 
 
+def load_privacy_config(*, load_dotenv: bool = True) -> PrivacyConfig:
+    if load_dotenv:
+        load_env_file()
+    return PrivacyConfig(
+        enabled=_env_bool("MIAOGENT_PRIVACY_PROTECTION_ENABLED", default=True),
+        block_ai_for_sensitive=_env_bool("MIAOGENT_PRIVACY_BLOCK_AI_FOR_SENSITIVE", default=True),
+        subject_body_scan_limit=int(os.getenv("MIAOGENT_PRIVACY_SCAN_LIMIT", "8000")),
+    )
+
+
 def _first_env(*keys: str, default: str | None = None) -> str | None:
     for key in keys:
         value = os.getenv(key)
@@ -127,3 +139,15 @@ def _mail_provider() -> str:
     if os.getenv("163_MAIL_ADDRESS") or os.getenv("163_MAIL_AUTH_CODE"):
         return "netease_163"
     return "qq"
+
+
+def _env_bool(key: str, *, default: bool) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default

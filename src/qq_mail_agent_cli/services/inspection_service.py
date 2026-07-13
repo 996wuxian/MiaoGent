@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from qq_mail_agent_cli.agent import MailAgent
 from qq_mail_agent_cli.mail_client import MailClient
 from qq_mail_agent_cli.models import MailMessage, TriageResult
+from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
 from qq_mail_agent_cli.storage import StateStore, StoredTriage
 
 
@@ -67,11 +68,13 @@ class SecretaryInspectionService:
         store: StateStore,
         *,
         model: str = "secretary-inspection",
+        privacy_config: PrivacyConfig | None = None,
     ):
         self._client = client
         self._agent = agent
         self._store = store
         self._model = model
+        self._privacy_config = privacy_config or PrivacyConfig()
 
     def inspect(self, *, limit: int = 20) -> SecretaryInspectionReport:
         if not 1 <= limit <= 100:
@@ -101,6 +104,24 @@ class SecretaryInspectionService:
                 continue
 
             handled_uids.add(message.id)
+            privacy_verdict = should_block_ai(message, self._privacy_config)
+            if privacy_verdict.sensitive:
+                summary_zh, reason, error_code = privacy_review_summary(privacy_verdict)
+                self._store.record_analysis_review_required(
+                    message,
+                    uid_validity=0,
+                    summary_zh=summary_zh,
+                    reason=reason,
+                    error_code=error_code,
+                )
+                failures.append(
+                    SecretaryInspectionFailure(
+                        uid=message.id,
+                        subject=message.subject,
+                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件发送给 DeepSeek",
+                    )
+                )
+                continue
             try:
                 result = self._agent.triage(message)
                 self._store.save_triage(message, result, model=self._model)

@@ -202,6 +202,33 @@ def test_web_triage_recent_skips_seen_and_saves_results(tmp_path):
     assert store.get_triage_result("uid:101") is not None
 
 
+def test_web_triage_recent_blocks_sensitive_mail_before_ai(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages = [
+        MailMessage(
+            id="uid:888",
+            sender="hr@example.com",
+            recipient="me@qq.com",
+            subject="Offer Letter",
+            body="请查看附件中的入职录用通知书。",
+            snippet="入职录用通知书",
+            is_seen=False,
+        )
+    ]
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 1})
+
+    assert response.status_code == 200
+    assert response.json()["processed"] == []
+    assert agent.triage_calls == []
+    insight = store.get_mail_insight("uid:888")
+    assert insight is not None
+    assert insight.analysis_status == "review_required"
+    assert "阻止发送给 DeepSeek" in insight.summary_zh
+
+
 def test_web_triage_queue_can_include_history_statuses(tmp_path):
     client, _, _ = _client(tmp_path)
     assert client.post("/api/triage/recent", json={"confirmed": True, "limit": 2}).status_code == 200
@@ -667,6 +694,59 @@ def test_web_secretary_inspection_logs_counts_without_mail_content(tmp_path):
     failure = response.json()["failures"][0]
     assert failure["error"] == "RuntimeError: 本封邮件分析失败，请稍后重试"
     assert "Customer secret" not in failure["error"]
+
+
+def test_web_secretary_inspection_blocks_sensitive_mail_before_ai(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages = [
+        MailMessage(
+            id="uid:777",
+            sender="hr@example.com",
+            recipient="me@qq.com",
+            subject="入职录用通知",
+            body="附件包含 offer 和劳动合同。",
+            is_seen=False,
+        )
+    ]
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/secretary/inspection", json={"confirmed": True, "limit": 1})
+
+    assert response.status_code == 200
+    assert agent.triage_calls == []
+    payload = response.json()
+    assert payload["processed_count"] == 0
+    assert payload["failed_count"] == 1
+    assert payload["failures"][0]["error"].startswith("PrivacyProtected")
+    insight = store.get_mail_insight("uid:777")
+    assert insight is not None
+    assert insight.analysis_status == "review_required"
+
+
+def test_web_manual_draft_and_translation_block_sensitive_mail_before_ai(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = MailMessage(
+        id="uid:101",
+        sender="hr@example.com",
+        recipient="me@qq.com",
+        subject="录用通知 Offer Letter",
+        body="请确认薪资待遇和身份证信息。",
+        snippet="录用通知",
+        is_seen=False,
+    )
+    agent = RecordingMailAgent()
+    client, _, _ = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    draft_response = client.post("/api/messages/101/draft", json={"confirmed": True})
+    translate_response = client.post("/api/messages/101/translate", json={"confirmed": True})
+
+    assert draft_response.status_code == 409
+    assert translate_response.status_code == 409
+    assert "隐私保护模式" in draft_response.json()["detail"]
+    assert "隐私保护模式" in translate_response.json()["detail"]
+    assert agent.draft_calls == []
+    assert agent.translation_calls == []
 
 
 def test_web_generates_draft_and_send_marks_sent(tmp_path):

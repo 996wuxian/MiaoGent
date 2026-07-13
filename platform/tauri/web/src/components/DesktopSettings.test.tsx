@@ -42,6 +42,7 @@ const config = {
   deepseekBaseUrl: 'https://api.deepseek.com',
   deepseekModel: 'deepseek-chat',
   deepseekTimeoutSeconds: 45,
+  privacyProtectionEnabled: true,
   hasMailAuthCode: false,
   hasDeepseekApiKey: false,
   secretStorage: 'windows_credential_manager' as const,
@@ -149,6 +150,25 @@ describe('DesktopSettings', () => {
     await user.click(checkbox);
 
     await waitFor(() => expect(desktopMocks.setAutostartEnabled).toHaveBeenCalledWith(false));
+  });
+
+  it('saves the privacy protection mode toggle', async () => {
+    const user = userEvent.setup();
+    render(<DesktopSettings open onClose={() => undefined} onSaved={() => undefined} />);
+
+    const toggle = await screen.findByRole('checkbox', { name: /阻止敏感邮件自动 AI 分析/ });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.type(screen.getByLabelText('QQ 授权码'), 'mail-secret');
+    await user.type(screen.getByLabelText('API Key'), 'deepseek-secret');
+    await user.click(screen.getByRole('button', { name: '保存并重启 Agent' }));
+
+    await waitFor(() => expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledTimes(1));
+    expect(desktopMocks.saveDesktopConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        privacyProtectionEnabled: false,
+      }),
+    );
   });
 
   it('switches the mail provider tab locally and applies 163 defaults only on save', async () => {

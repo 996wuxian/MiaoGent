@@ -92,6 +92,10 @@ fn default_deepseek_timeout() -> u16 {
     45
 }
 
+fn default_privacy_protection_enabled() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 struct StoredDesktopConfig {
@@ -112,6 +116,8 @@ struct StoredDesktopConfig {
     deepseek_model: String,
     #[serde(default = "default_deepseek_timeout")]
     deepseek_timeout_seconds: u16,
+    #[serde(default = "default_privacy_protection_enabled")]
+    privacy_protection_enabled: bool,
     #[serde(default)]
     data_root: Option<PathBuf>,
     #[serde(default)]
@@ -130,6 +136,7 @@ impl Default for StoredDesktopConfig {
             deepseek_base_url: default_deepseek_base_url(),
             deepseek_model: default_deepseek_model(),
             deepseek_timeout_seconds: default_deepseek_timeout(),
+            privacy_protection_enabled: default_privacy_protection_enabled(),
             data_root: None,
             webview_data_root: None,
         }
@@ -148,6 +155,8 @@ pub struct DesktopConfigInput {
     deepseek_base_url: String,
     deepseek_model: String,
     deepseek_timeout_seconds: u16,
+    #[serde(default = "default_privacy_protection_enabled")]
+    privacy_protection_enabled: bool,
     mail_auth_code: Option<String>,
     deepseek_api_key: Option<String>,
     #[serde(default)]
@@ -168,6 +177,7 @@ pub struct DesktopConfigView {
     deepseek_base_url: String,
     deepseek_model: String,
     deepseek_timeout_seconds: u16,
+    privacy_protection_enabled: bool,
     has_mail_auth_code: bool,
     has_deepseek_api_key: bool,
     secret_storage: &'static str,
@@ -342,6 +352,7 @@ fn view<R: Runtime>(
         deepseek_base_url: config.deepseek_base_url,
         deepseek_model: config.deepseek_model,
         deepseek_timeout_seconds: config.deepseek_timeout_seconds,
+        privacy_protection_enabled: config.privacy_protection_enabled,
         has_mail_auth_code: read_secret(MAIL_AUTH_CREDENTIAL)?.is_some(),
         has_deepseek_api_key: read_secret(DEEPSEEK_CREDENTIAL)?.is_some(),
         secret_storage: "windows_credential_manager",
@@ -383,6 +394,7 @@ pub fn save<R: Runtime>(
         deepseek_base_url: input.deepseek_base_url.trim_end_matches('/').to_string(),
         deepseek_model: input.deepseek_model.trim().to_string(),
         deepseek_timeout_seconds: input.deepseek_timeout_seconds,
+        privacy_protection_enabled: input.privacy_protection_enabled,
         data_root: current.data_root,
         webview_data_root: current.webview_data_root,
     };
@@ -435,6 +447,14 @@ pub fn sidecar_environment<R: Runtime>(
         (
             "DEEPSEEK_TIMEOUT_SECONDS".to_string(),
             config.deepseek_timeout_seconds.to_string(),
+        ),
+        (
+            "MIAOGENT_PRIVACY_PROTECTION_ENABLED".to_string(),
+            if config.privacy_protection_enabled {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
         ),
     ]);
     if !config.mail_address.is_empty() {
@@ -888,11 +908,13 @@ mod tests {
         let legacy: StoredDesktopConfig =
             serde_json::from_value(serde_json::json!({ "mailAddress": "me@qq.com" })).unwrap();
         assert_eq!(legacy.mail_provider, MailProvider::Qq);
+        assert!(legacy.privacy_protection_enabled);
 
         let mut config = StoredDesktopConfig::default();
         config.mail_provider = MailProvider::Netease163;
         let value = serde_json::to_value(config).unwrap();
         assert_eq!(value["mailProvider"], "netease_163");
+        assert_eq!(value["privacyProtectionEnabled"], true);
     }
 
     #[test]

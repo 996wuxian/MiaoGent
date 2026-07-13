@@ -96,6 +96,7 @@ function desktopConfig(overrides: Record<string, unknown> = {}) {
     deepseekBaseUrl: 'https://api.deepseek.com',
     deepseekModel: 'deepseek-chat',
     deepseekTimeoutSeconds: 45,
+    privacyProtectionEnabled: true,
     hasMailAuthCode: true,
     hasDeepseekApiKey: true,
     secretStorage: 'windows_credential_manager',

@@ -14,6 +14,7 @@ export type DesktopConfigView = {
   deepseekBaseUrl: string;
   deepseekModel: string;
   deepseekTimeoutSeconds: number;
+  privacyProtectionEnabled: boolean;
   hasMailAuthCode: boolean;
   hasDeepseekApiKey: boolean;
   secretStorage: 'windows_credential_manager';

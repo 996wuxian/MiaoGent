@@ -40,6 +40,7 @@ type FormState = {
   deepseekBaseUrl: string;
   deepseekModel: string;
   deepseekTimeoutSeconds: string;
+  privacyProtectionEnabled: boolean;
   clearMailAuthCode: boolean;
   clearDeepseekApiKey: boolean;
 };
@@ -66,6 +67,7 @@ const emptyForm: FormState = {
   deepseekBaseUrl: 'https://api.deepseek.com',
   deepseekModel: 'deepseek-chat',
   deepseekTimeoutSeconds: '45',
+  privacyProtectionEnabled: true,
   clearMailAuthCode: false,
   clearDeepseekApiKey: false,
 };
@@ -102,6 +104,7 @@ function formFromConfig(config: DesktopConfigView): FormState {
     deepseekBaseUrl: config.deepseekBaseUrl,
     deepseekModel: config.deepseekModel,
     deepseekTimeoutSeconds: String(config.deepseekTimeoutSeconds),
+    privacyProtectionEnabled: config.privacyProtectionEnabled,
   };
 }
 
@@ -290,6 +293,7 @@ export function DesktopSettings({
         deepseekBaseUrl: form.deepseekBaseUrl,
         deepseekModel: form.deepseekModel,
         deepseekTimeoutSeconds: Number(form.deepseekTimeoutSeconds),
+        privacyProtectionEnabled: form.privacyProtectionEnabled,
         ...(!form.clearMailAuthCode && form.mailAuthCode.trim() ? { mailAuthCode: form.mailAuthCode.trim() } : {}),
         ...(!form.clearDeepseekApiKey && form.deepseekApiKey.trim() ? { deepseekApiKey: form.deepseekApiKey.trim() } : {}),
         clearMailAuthCode: form.clearMailAuthCode,
@@ -643,6 +647,29 @@ export function DesktopSettings({
                   <span>保存时清除现有 DeepSeek API Key</span>
                 </label>
               )}
+            </section>
+
+            <section className="settings-section">
+              <div className="section-heading">
+                <div>
+                  <h3>隐私保护模式</h3>
+                  <p>疑似 offer、录用、合同、薪资、身份证、银行卡等隐私邮件不会自动发送给 DeepSeek。</p>
+                </div>
+                <Badge tone={form.privacyProtectionEnabled ? 'success' : 'warning'}>
+                  {form.privacyProtectionEnabled ? '已开启' : '已关闭'}
+                </Badge>
+              </div>
+              <label className="settings-switch">
+                <span>
+                  <strong>阻止敏感邮件自动 AI 分析</strong>
+                  <small>开启后仅提醒人工查看，不生成 AI 摘要或草稿。</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={form.privacyProtectionEnabled}
+                  onChange={(event) => setField('privacyProtectionEnabled', event.target.checked)}
+                />
+              </label>
             </section>
 
             <section className="settings-section">

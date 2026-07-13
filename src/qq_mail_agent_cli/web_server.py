@@ -20,6 +20,7 @@ from qq_mail_agent_cli.config import (
     load_app_config,
     load_deepseek_config,
     load_mail_config,
+    load_privacy_config,
 )
 from qq_mail_agent_cli.health import (
     HealthCheckItem,
@@ -30,6 +31,7 @@ from qq_mail_agent_cli.health import (
 )
 from qq_mail_agent_cli.llm_client import DeepSeekClient
 from qq_mail_agent_cli.mail_client import MailClient
+from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
 from qq_mail_agent_cli.services import (
     DraftConflictError,
     DraftNotFoundError,
@@ -92,6 +94,7 @@ def create_app(
     session_token: str | None = None,
     mail_config_factory: Callable[[], MailConfig] | None = None,
     deepseek_config_factory: Callable[[], DeepSeekConfig] | None = None,
+    privacy_config_factory: Callable[[], PrivacyConfig] | None = None,
     local_health_factory: Callable[[], list[HealthCheckItem]] | None = None,
     shutdown_callback: Callable[[], None] | None = None,
 ) -> FastAPI:
@@ -105,6 +108,7 @@ def create_app(
     app.state.sync_service_factory = sync_service_factory
     app.state.mail_config_factory = mail_config_factory or load_mail_config
     app.state.deepseek_config_factory = deepseek_config_factory or load_deepseek_config
+    app.state.privacy_config_factory = privacy_config_factory or load_privacy_config
     app.state.local_health_factory = local_health_factory or run_local_health_checks
     app.state.shutdown_callback = shutdown_callback
     app.state.secretary_inspection_lock = Lock()
@@ -283,7 +287,10 @@ def create_app(
 
         processed = []
         model_name = app.state.deepseek_config_factory().model
+        privacy_config = app.state.privacy_config_factory()
         for message in messages:
+            if _record_privacy_review_if_blocked(store, message, privacy_config):
+                continue
             result = agent.triage(message)
             store.save_triage(message, result, model=model_name)
             processed.append(triage_to_response(result, message=message))
@@ -307,6 +314,7 @@ def create_app(
                     agent,
                     store,
                     model=app.state.deepseek_config_factory().model,
+                    privacy_config=app.state.privacy_config_factory(),
                 ).inspect(limit=request.limit)
             except RuntimeError as error:
                 raise HTTPException(
@@ -551,6 +559,7 @@ def create_app(
     ):
         _require_confirmation(request)
         message = _get_message_or_404(client, uid)
+        _raise_if_privacy_blocked(message, app.state.privacy_config_factory())
         translation = agent.translate_message(message)
         store.upsert_mail(message)
         store.log_action("translate", uid=message.id, detail="Translated from web UI; translation body not persisted")
@@ -566,6 +575,7 @@ def create_app(
     ):
         _require_confirmation(request)
         message = _get_message_or_404(client, uid)
+        _raise_if_privacy_blocked(message, app.state.privacy_config_factory())
         draft = agent.draft_reply(message)
         store.upsert_mail(message)
         stored = DraftService(client, store).save_generated_draft(draft)
@@ -674,6 +684,39 @@ def _get_message_or_404(client: MailClient, uid: str):
     if message is None:
         raise HTTPException(status_code=404, detail="邮件不存在或 UID 无效")
     return message
+
+
+def _record_privacy_review_if_blocked(
+    store: StateStore,
+    message,
+    privacy_config: PrivacyConfig,
+) -> bool:
+    verdict = should_block_ai(message, privacy_config)
+    if not verdict.sensitive:
+        return False
+    summary_zh, reason, error_code = privacy_review_summary(verdict)
+    store.record_analysis_review_required(
+        message,
+        uid_validity=0,
+        summary_zh=summary_zh,
+        reason=reason,
+        error_code=error_code,
+    )
+    store.log_action(
+        "privacy_block",
+        uid=message.id,
+        detail="Privacy protection blocked automatic DeepSeek analysis.",
+    )
+    return True
+
+
+def _raise_if_privacy_blocked(message, privacy_config: PrivacyConfig) -> None:
+    verdict = should_block_ai(message, privacy_config)
+    if verdict.sensitive:
+        raise HTTPException(
+            status_code=409,
+            detail="该邮件疑似包含隐私信息，隐私保护模式已阻止发送给 DeepSeek。请人工查看。",
+        )
 
 
 def _normalize_uid_for_store(uid: str) -> str:

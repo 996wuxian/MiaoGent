@@ -12,6 +12,7 @@ from qq_mail_agent_cli.agent import MailAgent
 from qq_mail_agent_cli.config import (
     load_deepseek_config,
     load_mail_config,
+    load_privacy_config,
 )
 from qq_mail_agent_cli.desktop_events import JsonLineEventSink
 from qq_mail_agent_cli.health import run_local_health_checks
@@ -60,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     store = StateStore(desktop_db_path)
     mail_config = load_mail_config(load_dotenv=False)
     deepseek_config = load_deepseek_config(load_dotenv=False)
+    privacy_config = load_privacy_config(load_dotenv=False)
     mail_client = MailClient(mail_config)
     agent = MailAgent(llm_client=DeepSeekClient(deepseek_config))
     sync_service = MailSyncService(
@@ -68,6 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         store,
         event_sink=event_sink,
         model=deepseek_config.model,
+        privacy_config=privacy_config,
     )
     stop_event = Event()
     app = create_app(
@@ -78,6 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         session_token=session_token,
         mail_config_factory=lambda: mail_config,
         deepseek_config_factory=lambda: deepseek_config,
+        privacy_config_factory=lambda: privacy_config,
         local_health_factory=lambda: run_local_health_checks(
             load_dotenv=False,
             db_path=desktop_db_path,

@@ -10,6 +10,7 @@ from qq_mail_agent_cli.agent import MailAgent
 from qq_mail_agent_cli.desktop_events import EventSink, NullEventSink
 from qq_mail_agent_cli.mail_client import IncrementalMailBatch, MailClient
 from qq_mail_agent_cli.models import MailMessage
+from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
 from qq_mail_agent_cli.services.draft_service import DraftService
 from qq_mail_agent_cli.storage import StateStore, StoredMailInsight, StoredStartupSummary
 
@@ -87,6 +88,7 @@ class MailSyncService:
         event_sink: EventSink | None = None,
         model: str = "desktop-agent",
         mailbox: str = "INBOX",
+        privacy_config: PrivacyConfig | None = None,
     ) -> None:
         self._client = client
         self._agent = agent
@@ -94,6 +96,7 @@ class MailSyncService:
         self._event_sink = event_sink or NullEventSink()
         self._model = model
         self._mailbox = mailbox
+        self._privacy_config = privacy_config or PrivacyConfig()
         self._lock = Lock()
         self._emitted_notification_keys: set[str] = set()
         self._lease_owner = uuid4().hex
@@ -479,6 +482,25 @@ class MailSyncService:
             raise SyncAlreadyRunningError("邮件同步租约已丢失")
         failures: list[StartupSummaryFailure] = []
         analyzed_now = False
+        privacy_verdict = should_block_ai(message, self._privacy_config)
+        if privacy_verdict.sensitive:
+            insight = self._record_privacy_review(
+                message,
+                uid_validity=uid_validity,
+                verdict=privacy_verdict,
+                trigger=trigger,
+            )
+            return (
+                insight,
+                False,
+                [
+                    StartupSummaryFailure(
+                        uid=message.id,
+                        stage="privacy",
+                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件发送给 DeepSeek",
+                    )
+                ],
+            )
         body_over_limit = len(message.body) > self._MAX_AI_BODY_CHARS
         if message.content_truncated or body_over_limit:
             limit_reason = (
@@ -582,6 +604,22 @@ class MailSyncService:
             self._emit_important(insight, source=trigger)
 
         if insight.needs_reply and insight.reply_status not in {"draft_ready", "sent"}:
+            privacy_verdict = should_block_ai(message, self._privacy_config)
+            if privacy_verdict.sensitive:
+                insight = self._record_privacy_review(
+                    message,
+                    uid_validity=uid_validity,
+                    verdict=privacy_verdict,
+                    trigger=trigger,
+                )
+                failures.append(
+                    StartupSummaryFailure(
+                        uid=message.id,
+                        stage="privacy",
+                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件生成 DeepSeek 草稿",
+                    )
+                )
+                return insight, analyzed_now, failures
             legacy_draft = self._store.get_latest_draft_for_uid(
                 message.id,
                 uid_validity=0,
@@ -641,6 +679,32 @@ class MailSyncService:
             analyzed_now,
             failures,
         )
+
+    def _record_privacy_review(
+        self,
+        message: MailMessage,
+        *,
+        uid_validity: int,
+        verdict,
+        trigger: str,
+    ) -> StoredMailInsight:
+        summary_zh, reason, error_code = privacy_review_summary(verdict)
+        self._store.record_analysis_review_required(
+            message,
+            uid_validity=uid_validity,
+            mailbox=self._mailbox,
+            summary_zh=summary_zh,
+            reason=reason,
+            error_code=error_code,
+        )
+        insight = self._store.get_mail_insight(
+            message.id,
+            uid_validity=uid_validity,
+            mailbox=self._mailbox,
+        )
+        assert insight is not None
+        self._emit_attention_required(insight, source=trigger)
+        return insight
 
     def _emit_important(
         self,
