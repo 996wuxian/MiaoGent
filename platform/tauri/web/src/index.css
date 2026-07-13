@@ -215,16 +215,16 @@ select:focus-visible,
   position: fixed;
   top: 77px;
   left: 50%;
-  z-index: 60;
+  z-index: 200;
   transform: translateX(-50%);
   pointer-events: none;
 }
 
 .toast-strip {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  width: max-content;
+  width: fit-content;
   max-width: calc(100vw - 32px);
   min-height: 42px;
   padding: 9px 11px;
@@ -248,9 +248,10 @@ select:focus-visible,
 
 .toast-strip > span:nth-child(2) {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: min(680px, calc(100vw - 132px));
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.45;
 }
 
 .toast-strip.is-loading,
