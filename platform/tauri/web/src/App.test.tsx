@@ -867,6 +867,37 @@ describe('MiaoGent workbench', () => {
     expect(within(card as HTMLElement).queryByText('一般')).not.toBeInTheDocument();
   });
 
+  it('在全部视图和详情顶部展示隐私保护命中的敏感标记', async () => {
+    const sensitiveInsight = insight({
+      uid: 'uid:10',
+      subject: '录取通知书',
+      summary_zh: '隐私保护模式已跳过 AI 处理。',
+      priority_reason: 'PrivacyProtected: 命中敏感关键词。',
+      analysis_status: 'skipped',
+      analysis_error: 'privacy_sensitive',
+    });
+    installFetch({
+      recent: [message('uid:10', '录取通知书')],
+      handler: (url) => {
+        if (url.startsWith('/api/insights?')) return jsonResponse([sensitiveInsight]);
+        if (url === '/api/insights/uid%3A10') return jsonResponse(sensitiveInsight);
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '全部' }));
+    const card = (await screen.findByText('录取通知书')).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByText('敏感')).toBeInTheDocument();
+
+    await user.click(within(card as HTMLElement).getByRole('button', { name: /录取通知书/ }));
+    const panel = (await screen.findByRole('heading', { name: '录取通知书' })).closest('.reading-panel');
+    expect(panel).not.toBeNull();
+    expect(within(panel as HTMLElement).getAllByText('敏感').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('快速切换时只展示并自动标记最终有效选择', async () => {
     const detailA = deferred<Response>();
     const detailB = deferred<Response>();

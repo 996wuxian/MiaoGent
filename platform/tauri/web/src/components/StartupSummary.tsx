@@ -1,4 +1,5 @@
 import { AppIcon, Badge } from './ui';
+import { isSensitiveMail } from '../mailPrivacy';
 
 const importanceLabel: Record<string, string> = {
   general: '一般',
@@ -18,6 +19,7 @@ export function InsightSummary({ item }: { item: {
   reply_status: string;
 } }) {
   const requiresReview = item.analysis_status !== 'analyzed' || item.confidence < 0.55;
+  const sensitive = isSensitiveMail(item);
   return (
     <section className={`insight-summary is-${item.importance}`}>
       <div className="section-title">
@@ -30,6 +32,7 @@ export function InsightSummary({ item }: { item: {
             {importanceLabel[item.importance] ?? item.importance}
           </Badge>
         )}
+        {sensitive && <Badge tone="danger">敏感</Badge>}
         {item.needs_reply && !['sent', 'not_needed'].includes(item.reply_status) && <Badge tone="info">需要回复</Badge>}
         {item.reply_status === 'sent' && <Badge tone="success">已回复</Badge>}
       </div>

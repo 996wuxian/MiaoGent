@@ -191,6 +191,7 @@ export type StartupSummaryItem = {
   priority_reason: string;
   confidence: number;
   analysis_status: string;
+  analysis_error: string | null;
   reply_status: string;
   notification_status: string;
   draft_id: string | null;

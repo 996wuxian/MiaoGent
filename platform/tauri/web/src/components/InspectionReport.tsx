@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { isSensitiveMail } from '../mailPrivacy';
 import type { InspectionGroupKey, InspectionPlanItem, SecretaryInspectionReport } from '../types';
 import { AppIcon, Badge, IconButton } from './ui';
 
@@ -161,6 +162,7 @@ export function InspectionReport({
                               {item.classification && <Badge>{classificationLabels[item.classification] ?? item.classification}</Badge>}
                               {item.suggested_action && <Badge tone="info">{actionLabels[item.suggested_action] ?? item.suggested_action}</Badge>}
                               {item.queue_status && <Badge>{queueLabels[item.queue_status] ?? item.queue_status}</Badge>}
+                              {isSensitiveMail({ summary_zh: item.reason, priority_reason: item.action_reason }) && <Badge tone="danger">敏感</Badge>}
                             </span>
                             {(item.action_reason || item.reason) && (
                               <span className="inspection-item-reason">{item.action_reason || item.reason}</span>
@@ -197,6 +199,7 @@ export function InspectionReport({
                     <div>
                       <strong>{failure.subject || '(无主题)'}</strong>
                       <span>UID {failure.uid}</span>
+                      {isSensitiveMail(failure) && <Badge tone="danger">敏感</Badge>}
                       <p>{failure.error}</p>
                     </div>
                   </div>

@@ -282,6 +282,7 @@ class StartupSummaryItemResponse(BaseModel):
     priority_reason: str = ""
     confidence: float = 0
     analysis_status: str = "analyzed"
+    analysis_error: str | None = None
     reply_status: str = "not_needed"
     notification_status: str = "not_required"
     draft_id: str | None = None

@@ -38,6 +38,7 @@ class StartupSummaryItem:
     priority_reason: str
     confidence: float
     analysis_status: str
+    analysis_error: str | None
     reply_status: str
     notification_status: str
     draft_id: str | None
@@ -826,6 +827,7 @@ def _item_from_insight(insight: StoredMailInsight) -> StartupSummaryItem:
         priority_reason=insight.priority_reason,
         confidence=insight.confidence,
         analysis_status=insight.analysis_status,
+        analysis_error=insight.analysis_error,
         reply_status=insight.reply_status,
         notification_status=insight.notification_status,
         draft_id=insight.draft_id,

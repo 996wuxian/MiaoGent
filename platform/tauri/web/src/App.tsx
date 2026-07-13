@@ -30,6 +30,7 @@ import {
   type IconName,
 } from './components/ui';
 import { useExclusiveAction } from './hooks/useExclusiveAction';
+import { isSensitiveMail } from './mailPrivacy';
 import type {
   ActionLog,
   Draft,
@@ -138,6 +139,7 @@ type ListItem = {
   summary?: string;
   replyStatus?: string;
   analysisStatus?: string;
+  analysisError?: string | null;
   confidence?: number;
   draftId?: string | null;
 };
@@ -1561,6 +1563,7 @@ function App() {
               {selectedDetail && <Badge tone={selectedDetail.is_seen ? 'neutral' : 'warning'}>{selectedDetail.is_seen ? '已读' : '未读'}</Badge>}
               {selectedQueue && <Badge tone="info">{queueLabel[selectedQueue.queue_status] ?? selectedQueue.queue_status}</Badge>}
               {selectedQueue?.classification && <Badge tone={classificationTone(selectedQueue.classification)}>{classificationLabel[selectedQueue.classification] ?? selectedQueue.classification}</Badge>}
+              {isSensitiveMail(selectedInsight.data) && <Badge tone="danger">敏感</Badge>}
               {selectedInsight.data && (selectedInsightRequiresReview ? (
                 <Badge tone="warning">待人工查看</Badge>
               ) : (
@@ -1863,6 +1866,11 @@ function MailListCard({
     item.analysisStatus &&
       (item.analysisStatus !== 'analyzed' || (item.confidence ?? 0) < 0.55),
   );
+  const sensitive = isSensitiveMail({
+    analysis_error: item.analysisError,
+    summary_zh: item.summary,
+    priority_reason: item.reason,
+  });
   return (
     <article
       className={`mail-card ${selected ? 'is-active' : ''} ${item.isSeen === false ? 'is-unread' : ''}`}
@@ -1882,6 +1890,7 @@ function MailListCard({
             {item.importance && !requiresReview && <Badge tone={importanceTone(item.importance)}>{importanceLabel[item.importance] ?? item.importance}</Badge>}
             {item.needsReply && !['sent', 'not_needed'].includes(item.replyStatus ?? '') && <Badge tone="info">待回复</Badge>}
             {item.replyStatus === 'sent' && <Badge tone="success">已回复</Badge>}
+            {sensitive && <Badge tone="danger">敏感</Badge>}
             {requiresReview && <Badge tone="warning">待人工查看</Badge>}
             {item.draftId && item.replyStatus === 'draft_ready' && <Badge tone="success">草稿就绪</Badge>}
             {item.suggestedAction && <Badge tone="info">{actionLabel[item.suggestedAction] ?? item.suggestedAction}</Badge>}
@@ -2158,6 +2167,7 @@ function insightToListItem(item: MailInsight): ListItem {
     summary: item.summary_zh,
     replyStatus: item.reply_status,
     analysisStatus: item.analysis_status,
+    analysisError: item.analysis_error,
     confidence: item.confidence,
     draftId: item.draft_id,
     queueStatus: item.queue_status ?? null,
@@ -2172,6 +2182,7 @@ function messageWithInsightToListItem(message: MailMessage, insight: MailInsight
     summary: insight?.summary_zh,
     replyStatus: insight?.reply_status,
     analysisStatus: insight?.analysis_status,
+    analysisError: insight?.analysis_error,
     confidence: insight?.confidence,
     draftId: insight?.draft_id,
     queueStatus: insight?.queue_status ?? null,

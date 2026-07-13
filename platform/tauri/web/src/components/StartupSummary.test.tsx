@@ -46,4 +46,25 @@ describe('InsightSummary', () => {
     expect(screen.queryByText('需要回复')).not.toBeInTheDocument();
     expect(screen.getByText('无需再次发送')).toBeInTheDocument();
   });
+
+  it('shows sensitive badge for privacy-protected insights', () => {
+    render(
+      <InsightSummary
+        item={{
+          importance: 'important',
+          needs_reply: false,
+          summary_zh: '隐私保护模式已跳过 AI 处理。',
+          action_items: [],
+          priority_reason: 'PrivacyProtected: 命中敏感关键词。',
+          confidence: 1,
+          analysis_status: 'skipped',
+          analysis_error: 'privacy_sensitive',
+          reply_status: 'not_needed',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('敏感')).toBeInTheDocument();
+    expect(screen.getByText('待人工查看')).toBeInTheDocument();
+  });
 });
