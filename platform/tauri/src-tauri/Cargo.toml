@@ -1,6 +1,6 @@
 [package]
 name = "miaogent"
-version = "0.1.27"
+version = "0.1.28"
 description = "Desktop shell for MiaoGent"
 authors = ["wuxian"]
 license = ""
