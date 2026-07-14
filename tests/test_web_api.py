@@ -434,6 +434,77 @@ def test_web_can_save_latest_mail_insight_feedback(tmp_path):
     assert insight_response.json()["latest_feedback"] == "wrong"
 
 
+def test_desktop_reset_recognition_cache_clears_ai_state_but_keeps_mail_and_drafts(tmp_path):
+    client, _, store = _client(tmp_path)
+    message = MailMessage(
+        id="uid:113",
+        sender="hr@example.com",
+        recipient="me@qq.com",
+        subject="Offer discussion",
+        body="Please reply.",
+    )
+    store.save_triage(
+        message,
+        TriageResult(
+            mail_id=message.id,
+            classification=MailClassification.RESPOND,
+            reason="Needs reply.",
+            suggested_action=SuggestedAction.DRAFT_REPLY,
+            action_reason="Prepare a reply.",
+            importance=MailImportance.IMPORTANT,
+            needs_reply=True,
+            summary_zh="需要回复的 offer 邮件。",
+            confidence=0.9,
+            priority_reason="招聘沟通。",
+        ),
+        model="test",
+        uid_validity=5,
+    )
+    store.save_mail_insight_feedback(message.id, feedback="wrong", comment="应重新识别")
+    store.set_triage_queue_status(message.id, "done")
+    store.save_draft(Draft(id="draft-113", mail_id=message.id, to="hr@example.com", subject="Re: Offer", body="Thanks."))
+    store.save_sync_state("INBOX", uid_validity=5, last_processed_uid=113)
+    store.record_fetch_failure("INBOX", uid_validity=5, uid=114, quarantine_after=1)
+    store.save_startup_summary(
+        {
+            "trigger": "startup",
+            "new_count": 1,
+            "processed_count": 1,
+            "important_count": 1,
+            "urgent_count": 0,
+            "reply_count": 1,
+            "draft_ready_count": 0,
+            "general_count": 0,
+            "failed_count": 0,
+            "has_more": False,
+            "items": [],
+            "failures": [],
+        }
+    )
+    assert store.acquire_sync_lease("test-owner")
+
+    response = client.post("/api/desktop/reset-recognition-cache")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mail_insights"] == 1
+    assert payload["triage_results"] == 1
+    assert payload["mail_insight_feedback"] == 1
+    assert payload["mail_fetch_failures"] == 1
+    assert payload["desktop_summaries"] == 1
+    assert payload["mailbox_sync_state"] == 1
+    assert payload["sync_leases"] == 1
+    assert payload["total_removed"] == 7
+    assert store.list_mail_insights() == []
+    assert store.list_triage_results() == []
+    assert store.get_latest_mail_insight_feedback(message.id) is None
+    assert store.get_sync_state() is None
+    assert store.list_quarantined_fetch_failures(uid_validity=5) == []
+    assert store.search_mail_items(keyword="Offer")[0].uid == message.id
+    assert store.list_drafts(status="all")[0].uid == message.id
+    assert store.list_actions(1)[0].action == "reset_recognition_cache"
+
+
 def test_web_rejects_invalid_mail_insight_feedback(tmp_path):
     message = MailMessage(
         id="uid:112",

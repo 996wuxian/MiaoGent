@@ -64,6 +64,7 @@ from qq_mail_agent_cli.web_schemas import (
     MailInsightResponse,
     NotificationStatusRequest,
     QueueStatusRequest,
+    RecognitionCacheResetResponse,
     SearchMailResponse,
     SecretaryInspectionRequest,
     SecretaryInspectionResponse,
@@ -81,6 +82,7 @@ from qq_mail_agent_cli.web_schemas import (
     insight_feedback_to_response,
     message_to_response,
     mail_insight_to_response,
+    recognition_cache_reset_to_response,
     search_result_to_response,
     secretary_inspection_to_response,
     send_result_to_response,
@@ -481,6 +483,11 @@ def create_app(
             limit=limit,
         )
         return [fetch_failure_to_response(failure) for failure in failures]
+
+    @app.post("/api/desktop/reset-recognition-cache", response_model=RecognitionCacheResetResponse)
+    def reset_recognition_cache(store: Annotated[StateStore, Depends(_get_state_store)]):
+        report = store.reset_mail_recognition_cache()
+        return recognition_cache_reset_to_response(report)
 
     @app.get(
         "/api/desktop/startup-summary/latest",

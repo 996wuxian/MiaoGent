@@ -227,6 +227,17 @@ export type FetchFailure = {
   resolved_at: string | null;
 };
 
+export type RecognitionCacheResetReport = {
+  mail_insights: number;
+  triage_results: number;
+  mail_insight_feedback: number;
+  mail_fetch_failures: number;
+  desktop_summaries: number;
+  mailbox_sync_state: number;
+  sync_leases: number;
+  total_removed: number;
+};
+
 export type DesktopBackendConnection = {
   base_url: string;
   token: string;

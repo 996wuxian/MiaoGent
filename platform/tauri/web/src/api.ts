@@ -9,6 +9,7 @@ import type {
   MailInsight,
   MailMessage,
   QueueStatus,
+  RecognitionCacheResetReport,
   SearchMailItem,
   SecretaryInspectionReport,
   SendDraftResult,
@@ -178,6 +179,8 @@ export const api = {
     request<StartupSummary>('/api/desktop/startup-summary/latest', { signal }),
   fetchFailures: (signal?: AbortSignal) =>
     request<FetchFailure[]>('/api/desktop/fetch-failures?limit=100', { signal }),
+  resetRecognitionCache: () =>
+    request<RecognitionCacheResetReport>('/api/desktop/reset-recognition-cache', { method: 'POST' }),
   desktopSync: () => request<StartupSummary>('/api/desktop/sync', { method: 'POST' }),
 };
 

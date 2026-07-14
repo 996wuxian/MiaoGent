@@ -8,6 +8,7 @@ from qq_mail_agent_cli.storage import (
     ActionLogEntry,
     FetchFailureState,
     MailboxSyncState,
+    RecognitionCacheResetReport,
     StoredDraft,
     StoredMailInsight,
     StoredMailInsightFeedback,
@@ -315,6 +316,17 @@ class StartupSummaryResponse(BaseModel):
     failures: list[StartupSummaryFailureResponse] = Field(default_factory=list)
 
 
+class RecognitionCacheResetResponse(BaseModel):
+    mail_insights: int
+    triage_results: int
+    mail_insight_feedback: int
+    mail_fetch_failures: int
+    desktop_summaries: int
+    mailbox_sync_state: int
+    sync_leases: int
+    total_removed: int
+
+
 def message_to_response(message: MailMessage, *, include_body: bool) -> MessageResponse:
     return MessageResponse(
         id=message.id,
@@ -532,4 +544,17 @@ def startup_summary_to_response(summary: StoredStartupSummary) -> StartupSummary
         emitted_at=summary.emitted_at,
         acknowledged_at=summary.acknowledged_at,
         **summary.payload,
+    )
+
+
+def recognition_cache_reset_to_response(report: RecognitionCacheResetReport) -> RecognitionCacheResetResponse:
+    return RecognitionCacheResetResponse(
+        mail_insights=report.mail_insights,
+        triage_results=report.triage_results,
+        mail_insight_feedback=report.mail_insight_feedback,
+        mail_fetch_failures=report.mail_fetch_failures,
+        desktop_summaries=report.desktop_summaries,
+        mailbox_sync_state=report.mailbox_sync_state,
+        sync_leases=report.sync_leases,
+        total_removed=report.total_removed,
     )

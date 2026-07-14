@@ -144,6 +144,29 @@ class FetchFailureState:
     resolved_at: str | None
 
 
+@dataclass(frozen=True)
+class RecognitionCacheResetReport:
+    mail_insights: int
+    triage_results: int
+    mail_insight_feedback: int
+    mail_fetch_failures: int
+    desktop_summaries: int
+    mailbox_sync_state: int
+    sync_leases: int
+
+    @property
+    def total_removed(self) -> int:
+        return (
+            self.mail_insights
+            + self.triage_results
+            + self.mail_insight_feedback
+            + self.mail_fetch_failures
+            + self.desktop_summaries
+            + self.mailbox_sync_state
+            + self.sync_leases
+        )
+
+
 class StateStore:
     _SCHEMA_VERSION = 4
 
@@ -1436,6 +1459,40 @@ class StateStore:
                 "UPDATE mailbox_sync_state SET last_sync_at = ?, updated_at = ? WHERE mailbox = ?",
                 (_now(), _now(), mailbox),
             )
+
+    def reset_mail_recognition_cache(self) -> RecognitionCacheResetReport:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            counts: dict[str, int] = {}
+            for table in (
+                "mail_insight_feedback",
+                "mail_insights",
+                "triage_results",
+                "mail_fetch_failures",
+                "desktop_summaries",
+                "mailbox_sync_state",
+                "sync_leases",
+            ):
+                cursor = conn.execute(f"DELETE FROM {table}")
+                counts[table] = max(cursor.rowcount, 0)
+            conn.execute(
+                "INSERT INTO action_log(uid, action, detail, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    None,
+                    "reset_recognition_cache",
+                    "Cleared local AI labels, reply markers, privacy markers, queue state, feedback, fetch failures and sync cursor.",
+                    _now(),
+                ),
+            )
+        return RecognitionCacheResetReport(
+            mail_insights=counts["mail_insights"],
+            triage_results=counts["triage_results"],
+            mail_insight_feedback=counts["mail_insight_feedback"],
+            mail_fetch_failures=counts["mail_fetch_failures"],
+            desktop_summaries=counts["desktop_summaries"],
+            mailbox_sync_state=counts["mailbox_sync_state"],
+            sync_leases=counts["sync_leases"],
+        )
 
     def save_startup_summary(self, payload: dict[str, object]) -> StoredStartupSummary:
         now = _now()

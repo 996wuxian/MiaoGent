@@ -1334,23 +1334,46 @@ function App() {
       return;
     }
     if (!(await guardDraftChanges('刷新工作台'))) return;
-    announce('loading', '正在刷新当前工作台…');
-    if (desktopRuntime && desktopConnected) {
-      try {
-        await syncDesktopMailbox();
-      } catch (error) {
-        announce('error', `刷新前同步失败：${errorMessage(error)}`);
-        return;
+    announce('loading', '正在清除本地识别缓存并重新同步…');
+    try {
+      await api.resetRecognitionCache();
+      clearSelection();
+      setInsights(resource([]));
+      setAgentMailbox(resource([]));
+      setFetchFailures([]);
+      setQueue(resource([]));
+      setSearch(resource([]));
+      setSelectedDraftId('');
+      selectDraftLocally(undefined);
+
+      let syncErrorMessage = '';
+      if (desktopRuntime && desktopConnected) {
+        try {
+          await syncDesktopMailbox();
+        } catch (error) {
+          syncErrorMessage = errorMessage(error);
+        }
       }
+      const listTask =
+        leftViewRef.current === 'queue'
+          ? loadQueue(queueStatusRef.current)
+          : leftViewRef.current === 'search'
+            ? runSearch(appliedSearchFiltersRef.current)
+            : loadInsights(mailViewRef.current);
+      await Promise.all([
+        listTask,
+        loadLocalHealth(),
+        loadDrafts(draftFilterRef.current, { forceEditor: true }),
+        loadActions(),
+      ]);
+      if (syncErrorMessage) {
+        announce('error', `本地识别缓存已清除，但重新同步失败：${syncErrorMessage}`);
+      } else {
+        announce('success', '已重新同步并重新识别邮件标记。');
+      }
+    } catch (error) {
+      announce('error', `刷新失败：${errorMessage(error)}`);
     }
-    const listTask =
-      leftViewRef.current === 'queue'
-        ? loadQueue(queueStatusRef.current)
-        : leftViewRef.current === 'search'
-          ? runSearch(appliedSearchFiltersRef.current)
-          : loadInsights(mailViewRef.current);
-    await Promise.all([listTask, loadLocalHealth(), loadDrafts(draftFilterRef.current, { forceEditor: true }), loadActions()]);
-    announce('success', '工作台已刷新。');
   }
 
   function ensureSelectedMailVisible() {

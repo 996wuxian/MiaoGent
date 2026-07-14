@@ -247,6 +247,18 @@ function installFetch({
     if (url.startsWith('/api/drafts?')) return jsonResponse(drafts);
     if (url.startsWith('/api/actions')) return jsonResponse([]);
     if (url.startsWith('/api/desktop/fetch-failures')) return jsonResponse([]);
+    if (url === '/api/desktop/reset-recognition-cache' && init?.method === 'POST') {
+      return jsonResponse({
+        mail_insights: 0,
+        triage_results: 0,
+        mail_insight_feedback: 0,
+        mail_fetch_failures: 0,
+        desktop_summaries: 0,
+        mailbox_sync_state: 0,
+        sync_leases: 0,
+        total_removed: 0,
+      });
+    }
     if (url.includes('/mark-seen')) return jsonResponse({ ok: true, detail: 'seen' });
     if (url.startsWith('/api/messages/')) {
       const id = decodeURIComponent(url.slice('/api/messages/'.length));
@@ -380,7 +392,7 @@ describe('MiaoGent workbench', () => {
     expect(await screen.findByText('已标记为不准确')).toBeInTheDocument();
   });
 
-  it('桌面端刷新工作台会先同步邮箱并重拉全部邮件视图', async () => {
+  it('桌面端刷新工作台会先清除识别缓存，再同步邮箱并重拉全部邮件视图', async () => {
     vi.stubGlobal('__TAURI_INTERNALS__', {});
     tauriMocks.invoke.mockReset();
     tauriMocks.listen.mockReset().mockResolvedValue(vi.fn());
@@ -396,6 +408,18 @@ describe('MiaoGent workbench', () => {
       handler: (url, init) => {
         calls.push(`${init?.method ?? 'GET'} ${url}`);
         if (url === '/api/desktop/startup-summary/latest') return jsonResponse(null);
+        if (url === '/api/desktop/reset-recognition-cache' && init?.method === 'POST') {
+          return jsonResponse({
+            mail_insights: 2,
+            triage_results: 2,
+            mail_insight_feedback: 1,
+            mail_fetch_failures: 1,
+            desktop_summaries: 1,
+            mailbox_sync_state: 1,
+            sync_leases: 0,
+            total_removed: 8,
+          });
+        }
         if (url === '/api/desktop/sync' && init?.method === 'POST') {
           return jsonResponse({
             trigger: 'manual',
@@ -424,13 +448,48 @@ describe('MiaoGent workbench', () => {
     await user.click(screen.getByRole('button', { name: '刷新工作台' }));
 
     expect(await screen.findByText('新招聘邮件')).toBeInTheDocument();
+    expect(await screen.findByText('已重新同步并重新识别邮件标记。')).toBeInTheDocument();
+    const resetIndex = calls.findIndex((call) => call === 'POST /api/desktop/reset-recognition-cache');
     const syncIndex = calls.findIndex((call) => call === 'POST /api/desktop/sync');
     const mailboxIndex = calls.findIndex(
       (call, index) => index > syncIndex && call === 'GET /api/messages/recent?limit=100&offset=0',
     );
-    expect(syncIndex).toBeGreaterThanOrEqual(0);
+    expect(resetIndex).toBeGreaterThanOrEqual(0);
+    expect(syncIndex).toBeGreaterThan(resetIndex);
     expect(mailboxIndex).toBeGreaterThan(syncIndex);
+    expect(fetchMock).toHaveBeenCalledWith('/api/desktop/reset-recognition-cache', expect.objectContaining({ method: 'POST' }));
     expect(fetchMock).toHaveBeenCalledWith('/api/desktop/sync', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('桌面端刷新重置识别缓存失败时显示错误且不白屏', async () => {
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset().mockResolvedValue(vi.fn());
+    tauriMocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'backend_connection') return { base_url: '', token: 'desktop-token' };
+      if (command === 'take_pending_navigation') return null;
+      if (command === 'desktop_config') return desktopConfig();
+      return null;
+    });
+    installFetch({
+      handler: (url, init) => {
+        if (url === '/api/desktop/startup-summary/latest') return jsonResponse(null);
+        if (url === '/api/desktop/reset-recognition-cache' && init?.method === 'POST') {
+          return jsonResponse({ detail: 'reset failed' }, 500);
+        }
+        if (url.startsWith('/api/insights')) return jsonResponse([]);
+        return undefined;
+      },
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('tab', { name: '邮件' }));
+    await user.click(screen.getByRole('button', { name: '刷新工作台' }));
+
+    expect(await screen.findByText('刷新失败：reset failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MiaoGent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '刷新工作台' })).toBeInTheDocument();
   });
 
   it('桌面配置未完成时收到启动汇总事件也不直接弹窗', async () => {
