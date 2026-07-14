@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { Draft, MailInsight, MailMessage, SearchMailItem, SecretaryInspectionReport } from './types';
+import type { Draft, MailAiAudit, MailInsight, MailMessage, SearchMailItem, SecretaryInspectionReport } from './types';
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -55,6 +55,39 @@ function draft(overrides: Partial<Draft> = {}): Draft {
   };
 }
 
+function aiAudit(overrides: Partial<MailAiAudit> = {}): MailAiAudit {
+  return {
+    privacy_level: 'normal',
+    privacy_label: '普通',
+    privacy_reason: '未命中当前本地敏感/隐私标题规则。',
+    title_classification: {
+      status: 'local_title_rules',
+      label: '本地标题规则',
+      description: '已基于邮件标题完成初始分类，当前实现未把标题发送给 DeepSeek。',
+      sent_to_ai: false,
+    },
+    body_summary: {
+      status: 'generated',
+      label: '已生成',
+      description: '已生成 Agent 摘要，邮件正文已用于摘要生成。',
+      sent_to_ai: true,
+    },
+    reply_draft: {
+      status: 'not_generated',
+      label: '未生成',
+      description: '尚未生成回复草稿，正文未因草稿功能发送给 AI。',
+      sent_to_ai: false,
+    },
+    body_policy: {
+      status: 'allowed',
+      label: '允许按需处理',
+      description: '当前未命中敏感/隐私标题规则，摘要可按需生成。',
+      sent_to_ai: true,
+    },
+    ...overrides,
+  };
+}
+
 function insight(overrides: Partial<MailInsight> = {}): MailInsight {
   return {
     mail_key: 'INBOX-key-1',
@@ -81,6 +114,7 @@ function insight(overrides: Partial<MailInsight> = {}): MailInsight {
     feedback_updated_at: null,
     analyzed_at: '2026-07-10T08:09:00+08:00',
     updated_at: '2026-07-10T08:09:00+08:00',
+    ai_audit: aiAudit(),
     ...overrides,
   };
 }
@@ -1068,11 +1102,26 @@ describe('MiaoGent workbench', () => {
       importance: 'general',
       needs_reply: false,
       analysis_error: null,
+      ai_audit: aiAudit({
+        body_summary: {
+          status: 'not_generated',
+          label: '未生成',
+          description: '尚未生成 Agent 摘要，正文未因摘要功能发送给 AI。',
+          sent_to_ai: false,
+        },
+        body_policy: {
+          status: 'allowed',
+          label: '允许按需处理',
+          description: '当前未命中敏感/隐私标题规则，摘要可按需生成。',
+          sent_to_ai: false,
+        },
+      }),
     });
     const generatedInsight = insight({
       ...titleOnlyInsight,
       summary_zh: '这是按需生成的摘要。',
       analysis_status: 'analyzed',
+      ai_audit: aiAudit(),
     });
     const fetchMock = installFetch({
       recent: [message('uid:10', '普通项目沟通', true)],
@@ -1092,6 +1141,8 @@ describe('MiaoGent workbench', () => {
     await user.click(within(card as HTMLElement).getByRole('button', { name: /普通项目沟通/ }));
 
     expect(await screen.findByText('尚未生成 Agent 摘要。')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '隐私与 AI 使用情况' })).toBeInTheDocument();
+    expect(screen.getByText(/正文未因摘要功能发送给 AI/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '生成摘要' }));
 
     await waitFor(() => {
@@ -1112,11 +1163,39 @@ describe('MiaoGent workbench', () => {
       importance: 'important',
       needs_reply: false,
       analysis_error: 'privacy_sensitive',
+      ai_audit: aiAudit({
+        privacy_level: 'sensitive',
+        privacy_label: '敏感',
+        privacy_reason: '命中录用、入职、薪资、合同或附件等敏感规则。',
+        body_summary: {
+          status: 'not_generated',
+          label: '未生成',
+          description: '尚未生成 Agent 摘要，正文未因摘要功能发送给 AI。',
+          sent_to_ai: false,
+        },
+        body_policy: {
+          status: 'confirmation_required',
+          label: '需要二次确认',
+          description: '该邮件被标记为敏感/隐私；生成摘要会发送正文，必须二次确认。翻译和草稿默认阻止。',
+          sent_to_ai: false,
+        },
+      }),
     });
     const generatedInsight = insight({
       ...sensitiveInsight,
       summary_zh: '敏感邮件确认后生成的摘要。',
       analysis_status: 'analyzed',
+      ai_audit: aiAudit({
+        privacy_level: 'sensitive',
+        privacy_label: '敏感',
+        privacy_reason: '命中录用、入职、薪资、合同或附件等敏感规则。',
+        body_policy: {
+          status: 'confirmed_once',
+          label: '已确认过摘要',
+          description: '该邮件被标记为敏感/隐私；摘要已在确认后生成，后续正文 AI 操作仍需谨慎。',
+          sent_to_ai: true,
+        },
+      }),
     });
     const fetchMock = installFetch({
       recent: [message('uid:10', '录用通知 Offer Letter', true)],
@@ -1134,6 +1213,8 @@ describe('MiaoGent workbench', () => {
     const card = (await screen.findByText('录用通知 Offer Letter')).closest('article');
     expect(card).not.toBeNull();
     await user.click(within(card as HTMLElement).getByRole('button', { name: /录用通知 Offer Letter/ }));
+    expect(await screen.findByRole('region', { name: '隐私与 AI 使用情况' })).toBeInTheDocument();
+    expect(screen.getByText('需要二次确认')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: '生成摘要' }));
 
     const dialog = await screen.findByRole('dialog', { name: '确认为敏感邮件生成摘要' });

@@ -206,6 +206,11 @@ def test_web_generates_summary_on_demand_for_normal_mail(tmp_path):
     assert payload["analysis_status"] == "analyzed"
     assert payload["summary_zh"] == "Interview question 按需摘要"
     assert payload["analysis_error"] is None
+    assert payload["ai_audit"]["privacy_level"] == "normal"
+    assert payload["ai_audit"]["title_classification"]["sent_to_ai"] is False
+    assert payload["ai_audit"]["body_summary"]["status"] == "generated"
+    assert payload["ai_audit"]["body_summary"]["sent_to_ai"] is True
+    assert payload["ai_audit"]["body_policy"]["status"] == "allowed"
     assert agent.summary_calls == ["uid:101"]
     stored = store.get_mail_insight("uid:101")
     assert stored is not None
@@ -255,6 +260,11 @@ def test_web_summary_allows_sensitive_title_after_confirmation(tmp_path):
     assert payload["analysis_status"] == "analyzed"
     assert payload["analysis_error"] == "privacy_sensitive"
     assert payload["summary_zh"] == "录用通知 Offer Letter 按需摘要"
+    assert payload["ai_audit"]["privacy_level"] == "sensitive"
+    assert payload["ai_audit"]["body_summary"]["status"] == "generated"
+    assert payload["ai_audit"]["body_summary"]["sent_to_ai"] is True
+    assert payload["ai_audit"]["body_policy"]["status"] == "confirmed_once"
+    assert "后续正文 AI 操作仍需谨慎" in payload["ai_audit"]["body_policy"]["description"]
     assert agent.summary_calls == ["uid:101"]
     stored = store.get_mail_insight("uid:101")
     assert stored is not None
@@ -306,6 +316,13 @@ def test_web_triage_recent_blocks_sensitive_mail_before_ai(tmp_path):
     assert insight is not None
     assert insight.analysis_status == "review_required"
     assert "阻止发送给 DeepSeek" in insight.summary_zh
+    detail = client.get("/api/insights/888")
+    assert detail.status_code == 200
+    audit = detail.json()["ai_audit"]
+    assert audit["privacy_level"] == "sensitive"
+    assert audit["body_summary"]["status"] == "not_generated"
+    assert audit["body_summary"]["sent_to_ai"] is False
+    assert audit["body_policy"]["status"] == "confirmation_required"
 
 
 def test_web_triage_queue_can_include_history_statuses(tmp_path):

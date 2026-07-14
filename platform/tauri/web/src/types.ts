@@ -167,6 +167,24 @@ export type MailInsight = {
   analyzed_at: string | null;
   updated_at: string;
   queue_status?: QueueStatus | string | null;
+  ai_audit: MailAiAudit;
+};
+
+export type MailAiAuditSection = {
+  status: string;
+  label: string;
+  description: string;
+  sent_to_ai: boolean;
+};
+
+export type MailAiAudit = {
+  privacy_level: 'normal' | 'sensitive' | 'private' | string;
+  privacy_label: string;
+  privacy_reason: string;
+  title_classification: MailAiAuditSection;
+  body_summary: MailAiAuditSection;
+  reply_draft: MailAiAuditSection;
+  body_policy: MailAiAuditSection;
 };
 
 export type InsightFeedbackResponse = {

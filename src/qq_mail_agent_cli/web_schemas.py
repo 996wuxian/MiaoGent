@@ -213,6 +213,23 @@ class SecretaryInspectionResponse(BaseModel):
     failures: list[SecretaryInspectionFailureResponse] = Field(default_factory=list)
 
 
+class MailAiAuditSectionResponse(BaseModel):
+    status: str
+    label: str
+    description: str
+    sent_to_ai: bool = False
+
+
+class MailAiAuditResponse(BaseModel):
+    privacy_level: str = "normal"
+    privacy_label: str = "普通"
+    privacy_reason: str = ""
+    title_classification: MailAiAuditSectionResponse
+    body_summary: MailAiAuditSectionResponse
+    reply_draft: MailAiAuditSectionResponse
+    body_policy: MailAiAuditSectionResponse
+
+
 class MailInsightResponse(BaseModel):
     mail_key: str
     uid: str
@@ -239,6 +256,7 @@ class MailInsightResponse(BaseModel):
     analyzed_at: str | None = None
     updated_at: str
     queue_status: str | None = None
+    ai_audit: MailAiAuditResponse
 
 
 class InsightFeedbackResponse(BaseModel):
@@ -511,7 +529,120 @@ def mail_insight_to_response(
         analyzed_at=insight.analyzed_at,
         updated_at=insight.updated_at,
         queue_status=insight.queue_status,
+        ai_audit=_build_mail_ai_audit(insight),
     )
+
+
+def _build_mail_ai_audit(insight: StoredMailInsight) -> MailAiAuditResponse:
+    privacy_level, privacy_label = _privacy_level_from_error(insight.analysis_error)
+    privacy_reason = _privacy_reason(insight.analysis_error)
+    summary_generated = _has_generated_summary(insight)
+    draft_generated = bool(insight.draft_id) or insight.reply_status in {"draft_ready", "sent"}
+
+    if insight.analysis_status in {"pending", "analyzing"}:
+        title_status = "pending"
+        title_label = "未完成"
+        title_description = "尚未完成初始分类。"
+    elif insight.analysis_status == "failed":
+        title_status = "failed"
+        title_label = "分类失败"
+        title_description = "初始分类失败，未确认标题或正文已发送给 AI。"
+    else:
+        title_status = "local_title_rules"
+        title_label = "本地标题规则"
+        title_description = "已基于邮件标题完成初始分类，当前实现未把标题发送给 DeepSeek。"
+
+    if summary_generated:
+        summary = MailAiAuditSectionResponse(
+            status="generated",
+            label="已生成",
+            description="已生成 Agent 摘要，邮件正文已用于摘要生成。",
+            sent_to_ai=True,
+        )
+    else:
+        summary = MailAiAuditSectionResponse(
+            status="not_generated",
+            label="未生成",
+            description="尚未生成 Agent 摘要，正文未因摘要功能发送给 AI。",
+            sent_to_ai=False,
+        )
+
+    if draft_generated:
+        draft = MailAiAuditSectionResponse(
+            status="generated",
+            label="已生成",
+            description="已生成或发送过回复草稿，邮件正文已用于草稿生成。",
+            sent_to_ai=True,
+        )
+    else:
+        draft = MailAiAuditSectionResponse(
+            status="not_generated",
+            label="未生成",
+            description="尚未生成回复草稿，正文未因草稿功能发送给 AI。",
+            sent_to_ai=False,
+        )
+
+    if privacy_level == "normal":
+        policy = MailAiAuditSectionResponse(
+            status="allowed",
+            label="允许按需处理",
+            description="当前未命中敏感/隐私标题规则，摘要可按需生成。",
+            sent_to_ai=summary.sent_to_ai or draft.sent_to_ai,
+        )
+    elif summary_generated:
+        policy = MailAiAuditSectionResponse(
+            status="confirmed_once",
+            label="已确认过摘要",
+            description="该邮件被标记为敏感/隐私；摘要已在确认后生成，后续正文 AI 操作仍需谨慎。",
+            sent_to_ai=True,
+        )
+    else:
+        policy = MailAiAuditSectionResponse(
+            status="confirmation_required",
+            label="需要二次确认",
+            description="该邮件被标记为敏感/隐私；生成摘要会发送正文，必须二次确认。翻译和草稿默认阻止。",
+            sent_to_ai=False,
+        )
+
+    return MailAiAuditResponse(
+        privacy_level=privacy_level,
+        privacy_label=privacy_label,
+        privacy_reason=privacy_reason,
+        title_classification=MailAiAuditSectionResponse(
+            status=title_status,
+            label=title_label,
+            description=title_description,
+            sent_to_ai=False,
+        ),
+        body_summary=summary,
+        reply_draft=draft,
+        body_policy=policy,
+    )
+
+
+def _privacy_level_from_error(error: str | None) -> tuple[str, str]:
+    if error == "privacy_private":
+        return "private", "隐私"
+    if error == "privacy_sensitive":
+        return "sensitive", "敏感"
+    return "normal", "普通"
+
+
+def _privacy_reason(error: str | None) -> str:
+    if error == "privacy_private":
+        return "命中身份、财务、地址或联系方式等隐私规则。"
+    if error == "privacy_sensitive":
+        return "命中录用、入职、薪资、合同或附件等敏感规则。"
+    return "未命中当前本地敏感/隐私标题规则。"
+
+
+def _has_generated_summary(insight: StoredMailInsight) -> bool:
+    summary = (insight.summary_zh or "").strip()
+    if not summary:
+        return False
+    if "已按隐私保护模式阻止发送给 DeepSeek" in summary:
+        return False
+    return insight.analysis_status == "analyzed"
 
 
 def insight_feedback_to_response(feedback: StoredMailInsightFeedback) -> InsightFeedbackResponse:
