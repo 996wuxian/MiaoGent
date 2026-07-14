@@ -49,6 +49,7 @@ class NotificationStatusRequest(BaseModel):
 class InsightLabelsRequest(BaseModel):
     importance: str
     needs_reply: bool
+    privacy_level: str | None = None
 
 
 class InsightFeedbackRequest(BaseModel):
@@ -625,6 +626,8 @@ def _privacy_level_from_error(error: str | None) -> tuple[str, str]:
         return "private", "隐私"
     if error == "privacy_sensitive":
         return "sensitive", "敏感"
+    if error == "privacy_normal":
+        return "normal", "普通"
     return "normal", "普通"
 
 
@@ -633,6 +636,8 @@ def _privacy_reason(error: str | None) -> str:
         return "命中身份、财务、地址或联系方式等隐私规则。"
     if error == "privacy_sensitive":
         return "命中录用、入职、薪资、合同或附件等敏感规则。"
+    if error == "privacy_normal":
+        return "已人工标记为普通邮件。"
     return "未命中当前本地敏感/隐私标题规则。"
 
 

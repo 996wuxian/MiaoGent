@@ -160,10 +160,10 @@ export const api = {
   ) => request<MailInsight[]>(withParams('/api/insights', { limit: filters.limit ?? 100, ...filters }), { signal }),
   insight: (uid: string, signal?: AbortSignal) =>
     request<MailInsight>(`/api/insights/${encodeURIComponent(uid)}`, { signal }),
-  updateInsightLabels: (uid: string, importance: string, needsReply: boolean) =>
+  updateInsightLabels: (uid: string, importance: string, needsReply: boolean, privacyLevel: string) =>
     request<MailInsight>(`/api/insights/${encodeURIComponent(uid)}/labels`, {
       method: 'PATCH',
-      body: JSON.stringify({ importance, needs_reply: needsReply }),
+      body: JSON.stringify({ importance, needs_reply: needsReply, privacy_level: privacyLevel }),
     }),
   submitInsightFeedback: (uid: string, feedback: InsightFeedback, comment = '') =>
     request<InsightFeedbackResponse>(`/api/insights/${encodeURIComponent(uid)}/feedback`, {

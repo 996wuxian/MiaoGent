@@ -405,6 +405,7 @@ def create_app(
                 _normalize_uid_for_store(uid),
                 importance=request.importance,
                 needs_reply=request.needs_reply,
+                privacy_level=request.privacy_level,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

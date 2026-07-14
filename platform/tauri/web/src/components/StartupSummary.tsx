@@ -21,7 +21,14 @@ export function InsightSummary({ item, onGenerateSummary, summaryPending }: { it
   ai_audit?: MailAiAudit;
 }; onGenerateSummary?: () => void; summaryPending?: boolean }) {
   const requiresReview = !['analyzed', 'title_classified'].includes(item.analysis_status) || item.confidence < 0.55;
-  const privacyLevel = getMailPrivacyLevel(item);
+  const storedPrivacyLevel = item.analysis_error === 'privacy_private'
+    ? 'private'
+    : item.analysis_error === 'privacy_sensitive'
+      ? 'sensitive'
+      : item.analysis_error === 'privacy_normal'
+        ? 'normal'
+        : null;
+  const privacyLevel = getMailPrivacyLevel({ ...item, privacy_level: storedPrivacyLevel });
   const hasSummary = item.summary_zh.trim().length > 0;
   return (
     <section className={`insight-summary is-${item.importance}`}>

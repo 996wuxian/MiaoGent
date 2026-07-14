@@ -30,7 +30,7 @@ import {
   type IconName,
 } from './components/ui';
 import { useExclusiveAction } from './hooks/useExclusiveAction';
-import { getMailPrivacyLevel, isSensitiveMail } from './mailPrivacy';
+import { getMailPrivacyLevel, isSensitiveMail, type MailPrivacyLevel } from './mailPrivacy';
 import type {
   ActionLog,
   Draft,
@@ -145,6 +145,7 @@ type ListItem = {
   replyStatus?: string;
   analysisStatus?: string;
   analysisError?: string | null;
+  privacyLevel?: string | null;
   confidence?: number;
   draftId?: string | null;
 };
@@ -162,6 +163,14 @@ function resource<T>(data: T): Resource<T> {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function storedPrivacyLevel(insight: Pick<MailInsight, 'analysis_error' | 'ai_audit'> | null | undefined): MailPrivacyLevel | null {
+  if (!insight) return null;
+  if (insight.analysis_error === 'privacy_private') return 'private';
+  if (insight.analysis_error === 'privacy_sensitive') return 'sensitive';
+  if (insight.analysis_error === 'privacy_normal') return 'normal';
+  return null;
 }
 
 function isDevtoolsShortcut(event: KeyboardEvent) {
@@ -1026,6 +1035,7 @@ function App() {
     const target = validateTarget();
     if (!target) return;
     const privacyLevel = getMailPrivacyLevel({
+      privacy_level: storedPrivacyLevel(selectedInsight.data),
       analysis_error: selectedInsight.data?.analysis_error,
       subject: selectedInsight.data?.subject ?? target.message.subject,
       sender: selectedInsight.data?.sender ?? target.message.sender,
@@ -1117,7 +1127,7 @@ function App() {
     });
   }
 
-  async function changeInsightLabels(importance: MailImportance, needsReply: boolean) {
+  async function changeInsightLabels(importance: MailImportance, needsReply: boolean, privacyLevel: MailPrivacyLevel) {
     const target = selectedInsight.data;
     if (!target) {
       announce('error', '当前邮件还没有本地洞察，先整理邮件后再修改标记。');
@@ -1125,9 +1135,10 @@ function App() {
     }
     await runExclusive(`insight-labels:${normalizeUid(target.uid)}`, async () => {
       try {
-        const updated = await api.updateInsightLabels(target.uid, importance, needsReply);
+        const updated = await api.updateInsightLabels(target.uid, importance, needsReply, privacyLevel);
         updateInsightEverywhere(updated);
         announce('success', '邮件标记已更新。');
+        await refreshSearchIfInitialized();
       } catch (error) {
         announce('error', `标记更新失败：${errorMessage(error)}`);
       }
@@ -1728,7 +1739,7 @@ function App() {
               feedbackPending={Boolean(selectedInsight.data && isPending(`insight-feedback:${normalizeUid(selectedInsight.data.uid)}`))}
               onTranslate={() => void translateSelected()}
               onDraft={() => void createDraftForSelected()}
-              onLabelsChange={(importance, needsReply) => void changeInsightLabels(importance, needsReply)}
+              onLabelsChange={(importance, needsReply, privacyLevel) => void changeInsightLabels(importance, needsReply, privacyLevel)}
               onFeedback={(value) => void submitInsightFeedback(value)}
               onStatus={(status) => selectedId && void changeQueueStatus(selectedId, status)}
               onTrash={() => void moveSelectedToTrash()}
@@ -1946,6 +1957,7 @@ function MailListCard({
       (!['analyzed', 'title_classified'].includes(item.analysisStatus) || (item.confidence ?? 0) < 0.55),
   );
   const sensitive = isSensitiveMail({
+    privacy_level: item.privacyLevel,
     analysis_error: item.analysisError,
     subject: item.subject,
     sender: item.sender,
@@ -2007,7 +2019,7 @@ function MailActions({
   feedbackPending: boolean;
   onTranslate: () => void;
   onDraft: () => void;
-  onLabelsChange: (importance: MailImportance, needsReply: boolean) => void;
+  onLabelsChange: (importance: MailImportance, needsReply: boolean, privacyLevel: MailPrivacyLevel) => void;
   onFeedback: (feedback: InsightFeedback) => void;
   onStatus: (status: QueueStatus) => void;
   onTrash: () => void;
@@ -2065,11 +2077,19 @@ function InsightLabelEditor({
   disabled: boolean;
   pending: boolean;
   feedbackPending: boolean;
-  onChange: (importance: MailImportance, needsReply: boolean) => void;
+  onChange: (importance: MailImportance, needsReply: boolean, privacyLevel: MailPrivacyLevel) => void;
   onFeedback: (feedback: InsightFeedback) => void;
 }) {
   const currentImportance = insight?.importance ?? 'general';
   const currentNeedsReply = Boolean(insight?.needs_reply);
+  const currentPrivacyLevel = getMailPrivacyLevel({
+    privacy_level: storedPrivacyLevel(insight),
+    analysis_error: insight?.analysis_error,
+    subject: insight?.subject,
+    sender: insight?.sender,
+    summary_zh: insight?.summary_zh,
+    priority_reason: insight?.priority_reason,
+  });
   const currentFeedback = insight?.latest_feedback ?? null;
   return (
     <div className="insight-label-editor">
@@ -2089,21 +2109,50 @@ function InsightLabelEditor({
                 type="button"
                 className={currentImportance === value ? 'is-active' : ''}
                 disabled={disabled || pending}
-                onClick={() => onChange(value, currentNeedsReply)}
+                onClick={() => onChange(value, currentNeedsReply, currentPrivacyLevel)}
               >
                 {label}
               </button>
             ))}
           </div>
-          <label className="label-toggle">
-            <input
-              type="checkbox"
-              checked={currentNeedsReply}
-              disabled={disabled || pending}
-              onChange={(event) => onChange(currentImportance, event.target.checked)}
-            />
-            <span>待回复</span>
-          </label>
+          <div className="label-button-row compact" role="group" aria-label="回复状态标记">
+            {([
+              [false, '不需回复'],
+              [true, '待回复'],
+            ] as Array<[boolean, string]>).map(([value, label]) => (
+              <button
+                key={label}
+                type="button"
+                className={currentNeedsReply === value ? 'is-active' : ''}
+                disabled={disabled || pending}
+                onClick={() => onChange(currentImportance, value, currentPrivacyLevel)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="label-button-row" role="group" aria-label="隐私标记">
+            {([
+              ['normal', '普通'],
+              ['sensitive', '敏感'],
+              ['private', '隐私'],
+            ] as Array<[MailPrivacyLevel, string]>).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={currentPrivacyLevel === value ? 'is-active' : ''}
+                disabled={disabled || pending}
+                onClick={() => onChange(currentImportance, currentNeedsReply, value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {currentPrivacyLevel !== 'normal' ? (
+            <p className="muted-hint">敏感/隐私标记会保持正文 AI 操作的保护提示。</p>
+          ) : (
+            <p className="muted-hint">普通会取消当前邮件的敏感/隐私保护提示。</p>
+          )}
           {pending && <p className="muted-hint">正在保存标记…</p>}
           <div className="insight-feedback-box">
             <div>
@@ -2207,6 +2256,7 @@ function buildDetailBadges(
     });
   }
   const privacyLevel = getMailPrivacyLevel({
+    privacy_level: storedPrivacyLevel(insight),
     analysis_error: insight?.analysis_error,
     subject: insight?.subject ?? detail?.subject,
     sender: insight?.sender ?? detail?.sender,
@@ -2249,6 +2299,7 @@ function buildListBadges(
   );
   if (sensitive) {
     const privacyLevel = getMailPrivacyLevel({
+      privacy_level: item.privacyLevel,
       analysis_error: item.analysisError,
       subject: item.subject,
       sender: item.sender,
@@ -2348,6 +2399,7 @@ function insightToListItem(item: MailInsight): ListItem {
     replyStatus: item.reply_status,
     analysisStatus: item.analysis_status,
     analysisError: item.analysis_error,
+    privacyLevel: storedPrivacyLevel(item),
     confidence: item.confidence,
     draftId: item.draft_id,
     queueStatus: item.queue_status ?? null,
@@ -2363,6 +2415,7 @@ function messageWithInsightToListItem(message: MailMessage, insight: MailInsight
     replyStatus: insight?.reply_status,
     analysisStatus: insight?.analysis_status,
     analysisError: insight?.analysis_error,
+    privacyLevel: storedPrivacyLevel(insight),
     confidence: insight?.confidence,
     draftId: insight?.draft_id,
     queueStatus: insight?.queue_status ?? null,

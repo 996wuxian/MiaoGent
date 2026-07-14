@@ -397,7 +397,7 @@ def test_web_can_update_mail_insight_labels(tmp_path):
 
     response = client.patch(
         "/api/insights/110/labels",
-        json={"importance": "urgent", "needs_reply": True},
+        json={"importance": "urgent", "needs_reply": True, "privacy_level": "private"},
     )
 
     assert response.status_code == 200
@@ -406,10 +406,26 @@ def test_web_can_update_mail_insight_labels(tmp_path):
     assert payload["needs_reply"] is True
     assert payload["reply_status"] == "needs_reply"
     assert payload["notification_status"] == "pending"
+    assert payload["analysis_error"] == "privacy_private"
+    assert payload["ai_audit"]["privacy_level"] == "private"
     insight = store.get_mail_insight("uid:110")
     assert insight is not None
     assert insight.importance == "urgent"
     assert insight.needs_reply is True
+    assert insight.analysis_error == "privacy_private"
+
+    clear_response = client.patch(
+        "/api/insights/110/labels",
+        json={"importance": "general", "needs_reply": False, "privacy_level": "normal"},
+    )
+
+    assert clear_response.status_code == 200
+    clear_payload = clear_response.json()
+    assert clear_payload["importance"] == "general"
+    assert clear_payload["needs_reply"] is False
+    assert clear_payload["reply_status"] == "not_needed"
+    assert clear_payload["analysis_error"] == "privacy_normal"
+    assert clear_payload["ai_audit"]["privacy_level"] == "normal"
 
 
 def test_web_can_save_latest_mail_insight_feedback(tmp_path):

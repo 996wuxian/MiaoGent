@@ -4,6 +4,7 @@ export type MailPrivacyLevel = 'normal' | 'sensitive' | 'private';
 
 export function isSensitiveMail(value: {
   analysis_error?: string | null;
+  privacy_level?: string | null;
   subject?: string | null;
   sender?: string | null;
   summary_zh?: string | null;
@@ -15,6 +16,7 @@ export function isSensitiveMail(value: {
 
 export function getMailPrivacyLevel(value: {
   analysis_error?: string | null;
+  privacy_level?: string | null;
   subject?: string | null;
   sender?: string | null;
   summary_zh?: string | null;
@@ -22,6 +24,9 @@ export function getMailPrivacyLevel(value: {
   error?: string | null;
 } | null | undefined): MailPrivacyLevel {
   if (!value) return 'normal';
+  if (value.privacy_level === 'private') return 'private';
+  if (value.privacy_level === 'sensitive') return 'sensitive';
+  if (value.privacy_level === 'normal') return 'normal';
   if (value.analysis_error === PRIVACY_PRIVATE_ERROR) return 'private';
   if (value.analysis_error === PRIVACY_SENSITIVE_ERROR) return 'sensitive';
   const scanText = (value.subject ?? '').toLowerCase();

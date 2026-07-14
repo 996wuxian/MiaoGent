@@ -965,10 +965,13 @@ class StateStore:
         *,
         importance: str,
         needs_reply: bool,
+        privacy_level: str | None = None,
         uid_validity: int | None = None,
         mailbox: str = "INBOX",
     ) -> StoredMailInsight | None:
         _validate_importance(importance)
+        analysis_error = _analysis_error_from_privacy_level(privacy_level)
+        update_privacy = privacy_level is not None
         mail_key = self._latest_mail_key(uid, uid_validity=uid_validity, mailbox=mailbox)
         if mail_key is None:
             return None
@@ -1001,6 +1004,7 @@ class StateStore:
                     needs_reply = ?,
                     reply_status = ?,
                     notification_status = ?,
+                    analysis_error = CASE WHEN ? THEN ? ELSE analysis_error END,
                     updated_at = ?
                 WHERE mail_key = ?
                 """,
@@ -1009,6 +1013,8 @@ class StateStore:
                     _bool_to_int(needs_reply),
                     reply_status,
                     notification_status,
+                    _bool_to_int(update_privacy),
+                    analysis_error,
                     now,
                     mail_key,
                 ),
@@ -2331,6 +2337,18 @@ def _validate_queue_status(status: str) -> None:
 def _validate_importance(value: str) -> None:
     if value not in {item.value for item in MailImportance}:
         raise ValueError(f"Unknown importance: {value}")
+
+
+def _analysis_error_from_privacy_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value == "normal":
+        return "privacy_normal"
+    if value == "sensitive":
+        return "privacy_sensitive"
+    if value == "private":
+        return "privacy_private"
+    raise ValueError(f"Unknown privacy level: {value}")
 
 
 def _validate_analysis_status(value: str) -> None:

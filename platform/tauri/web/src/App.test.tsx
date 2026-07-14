@@ -345,7 +345,7 @@ describe('MiaoGent workbench', () => {
     expect(screen.getByText('Draft failed')).toBeInTheDocument();
   }, 10000);
 
-  it('右侧面板可以人工修改重要性和待回复标记', async () => {
+  it('右侧面板可以人工修改重要性、待回复和隐私标记', async () => {
     const initialInsight = insight();
     const fetchMock = installFetch({
       recent: [{ ...message('uid:10', '招聘沟通'), date: 'Fri, 10 Jul 2026 08:08:09 +0800' }],
@@ -353,12 +353,26 @@ describe('MiaoGent workbench', () => {
         if (url.startsWith('/api/insights?')) return jsonResponse([initialInsight]);
         if (url === '/api/insights/uid%3A10') return jsonResponse(initialInsight);
         if (url === '/api/insights/uid%3A10/labels' && init?.method === 'PATCH') {
-          const payload = JSON.parse(String(init.body)) as { importance: MailInsight['importance']; needs_reply: boolean };
+          const payload = JSON.parse(String(init.body)) as {
+            importance: MailInsight['importance'];
+            needs_reply: boolean;
+            privacy_level: 'normal' | 'sensitive' | 'private';
+          };
+          const analysisError = payload.privacy_level === 'private'
+            ? 'privacy_private'
+            : payload.privacy_level === 'sensitive'
+              ? 'privacy_sensitive'
+              : null;
           return jsonResponse(insight({
             importance: payload.importance,
             needs_reply: payload.needs_reply,
             reply_status: payload.needs_reply ? 'needs_reply' : 'not_needed',
             notification_status: payload.importance === 'general' ? 'not_required' : 'pending',
+            analysis_error: analysisError,
+            ai_audit: aiAudit({
+              privacy_level: payload.privacy_level,
+              privacy_label: payload.privacy_level === 'private' ? '隐私' : payload.privacy_level === 'sensitive' ? '敏感' : '普通',
+            }),
             priority_reason: '人工更新标记。',
           }));
         }
@@ -375,17 +389,24 @@ describe('MiaoGent workbench', () => {
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/insights/uid%3A10/labels' && init?.method === 'PATCH');
       expect(call).toBeTruthy();
-      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ importance: 'important', needs_reply: false });
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ importance: 'important', needs_reply: false, privacy_level: 'normal' });
     });
 
-    await user.click(screen.getByLabelText('待回复'));
+    await user.click(within(screen.getByRole('group', { name: '回复状态标记' })).getByRole('button', { name: '待回复' }));
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/insights/uid%3A10/labels' && init?.method === 'PATCH');
       const lastCall = calls[calls.length - 1];
-      expect(JSON.parse(String(lastCall?.[1]?.body))).toEqual({ importance: 'important', needs_reply: true });
+      expect(JSON.parse(String(lastCall?.[1]?.body))).toEqual({ importance: 'important', needs_reply: true, privacy_level: 'normal' });
+    });
+    await user.click(within(screen.getByRole('group', { name: '隐私标记' })).getByRole('button', { name: '敏感' }));
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/insights/uid%3A10/labels' && init?.method === 'PATCH');
+      const lastCall = calls[calls.length - 1];
+      expect(JSON.parse(String(lastCall?.[1]?.body))).toEqual({ importance: 'important', needs_reply: true, privacy_level: 'sensitive' });
     });
     expect(screen.getAllByText('重要').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('需要回复').length + screen.queryAllByText('待回复').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('敏感').length).toBeGreaterThan(0);
   });
 
   it('右侧面板可以记录 AI 判断反馈', async () => {
