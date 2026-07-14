@@ -706,21 +706,22 @@ function App() {
         api.recentMessages(100, 0, controller.signal),
       ]);
       if (insightsRequestRef.current.sequence !== sequence) return;
-      const items = insightsResult.status === 'fulfilled' ? insightsResult.value : [];
-      const failures = failuresResult.status === 'fulfilled' ? failuresResult.value : [];
-      const mailboxItems = mailboxResult.status === 'fulfilled' ? mailboxResult.value : [];
       const errors = [
         insightsResult.status === 'rejected' ? `邮件洞察：${errorMessage(insightsResult.reason)}` : '',
         failuresResult.status === 'rejected' ? `读取失败项：${errorMessage(failuresResult.reason)}` : '',
         mailboxResult.status === 'rejected' ? `当前邮箱列表：${errorMessage(mailboxResult.reason)}` : '',
       ].filter(Boolean);
-      setInsights({ data: items, loading: false, error: errors.join('；') });
-      setAgentMailbox({
-        data: mailboxItems,
+      setInsights((current) => ({
+        data: insightsResult.status === 'fulfilled' ? insightsResult.value : current.data,
+        loading: false,
+        error: errors.join('；'),
+      }));
+      setAgentMailbox((current) => ({
+        data: mailboxResult.status === 'fulfilled' ? mailboxResult.value : current.data,
         loading: false,
         error: mailboxResult.status === 'rejected' ? errorMessage(mailboxResult.reason) : '',
-      });
-      if (view === 'all') setFetchFailures(failures);
+      }));
+      if (view === 'all' && failuresResult.status === 'fulfilled') setFetchFailures(failuresResult.value);
     } catch (error) {
       if (isAbortError(error) || insightsRequestRef.current.sequence !== sequence) return;
       setInsights((current) => ({ ...current, loading: false, error: errorMessage(error) }));
@@ -1400,11 +1401,18 @@ function App() {
             .filter(isVisibleAgentItem),
         );
       }
-      const mailboxItems = sortAgentMailboxItems(
-        agentMailbox.data
-          .map((message) => messageWithInsightToListItem(message, insightMap.get(normalizeUid(message.id))))
-          .filter(isVisibleAgentItem),
-      );
+      const mailboxItems =
+        agentMailbox.error && agentMailbox.data.length === 0
+          ? sortAgentMailboxItems(
+              insights.data
+                .map(insightToListItem)
+                .filter(isVisibleAgentItem),
+            )
+          : sortAgentMailboxItems(
+              agentMailbox.data
+                .map((message) => messageWithInsightToListItem(message, insightMap.get(normalizeUid(message.id))))
+                .filter(isVisibleAgentItem),
+            );
       const mailboxUids = new Set(mailboxItems.map((item) => normalizeUid(item.uid)));
       return [
         ...fetchFailures

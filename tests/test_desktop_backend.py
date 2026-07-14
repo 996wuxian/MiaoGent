@@ -563,6 +563,63 @@ def test_mail_client_transient_fetch_error_aborts_batch_instead_of_poisoning_uid
         )
 
 
+def test_mail_client_recent_list_fetches_headers_only_and_skips_failed_uids(monkeypatch):
+    class HeaderListImap:
+        def __init__(self):
+            self.fetch_queries: list[tuple[bytes, str]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def select(self, mailbox, readonly=True):
+            return "OK", [b"2"]
+
+        def uid(self, command, *args):
+            if command == "search":
+                return "OK", [b"1 2"]
+            assert command == "fetch"
+            uid, query = args
+            self.fetch_queries.append((uid, query))
+            assert query == "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])"
+            if uid == b"1":
+                raise TimeoutError("The read operation timed out")
+            headers = (
+                b"From: sender@example.com\r\n"
+                b"To: you@qq.com\r\n"
+                b"Subject: Header only\r\n"
+                b"Date: Fri, 10 Jul 2026 08:08:09 +0800\r\n"
+                b"Message-ID: <header-only@example.com>\r\n\r\n"
+            )
+            return "OK", [(b"2 (FLAGS (\\Seen) RFC822.SIZE 2048)", headers)]
+
+    client = MailClient(
+        MailConfig("you@qq.com", "imap.qq.com", 993, "smtp.qq.com", 465, "secret")
+    )
+    fake_imap = HeaderListImap()
+    monkeypatch.setattr(client, "_connect_imap", lambda: fake_imap)
+    monkeypatch.setattr(
+        client,
+        "_fetch_uid",
+        lambda *args: (_ for _ in ()).throw(AssertionError("recent list must not fetch full MIME")),
+    )
+
+    messages = client.list_real_recent(2)
+
+    assert [message.id for message in messages] == ["uid:2"]
+    assert messages[0].subject == "Header only"
+    assert messages[0].body == ""
+    assert messages[0].snippet == "邮件正文将在打开后读取。"
+    assert messages[0].is_seen is True
+    assert messages[0].size_bytes == 2048
+    assert fake_imap.fetch_queries == [
+        (b"2", "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])"),
+        (b"1", "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])"),
+    ]
+
+
 def test_incremental_fetch_uses_header_only_for_oversized_message(monkeypatch):
     class HeaderOnlyImap:
         def uid(self, command, uid, query):

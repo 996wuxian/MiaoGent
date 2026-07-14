@@ -595,6 +595,75 @@ describe('MiaoGent workbench', () => {
     expect(screen.queryByText('历史缓存邮件')).not.toBeInTheDocument();
   });
 
+  it('当前邮箱列表读取失败时用本地洞察兜底展示并保留错误提示', async () => {
+    const user = userEvent.setup();
+    installFetch({
+      handler: (url) => {
+        if (url.startsWith('/api/messages/recent')) return jsonResponse({ detail: 'The read operation timed out' }, 502);
+        if (url.startsWith('/api/insights?')) {
+          return jsonResponse([insight({ uid: 'uid:10', subject: '本地缓存邮件', importance: 'important' })]);
+        }
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: '全部' }));
+
+    expect(await screen.findByText('本地缓存邮件')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('当前邮箱列表');
+    expect(screen.getByRole('button', { name: 'MiaoGent' })).toBeInTheDocument();
+  });
+
+  it('当前邮箱列表重试再次失败时不白屏并继续显示本地兜底列表', async () => {
+    const user = userEvent.setup();
+    installFetch({
+      handler: (url) => {
+        if (url.startsWith('/api/messages/recent')) return jsonResponse({ detail: 'The read operation timed out' }, 502);
+        if (url.startsWith('/api/insights?')) {
+          return jsonResponse([insight({ uid: 'uid:10', subject: '本地缓存邮件', importance: 'important' })]);
+        }
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: '全部' }));
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: '重试' }));
+
+    expect(await screen.findByText('本地缓存邮件')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('当前邮箱列表');
+    expect(screen.getByRole('button', { name: 'MiaoGent' })).toBeInTheDocument();
+  });
+
+  it('当前邮箱列表重试成功后恢复真实邮箱列表', async () => {
+    const user = userEvent.setup();
+    let recentCalls = 0;
+    installFetch({
+      handler: (url) => {
+        if (url.startsWith('/api/messages/recent')) {
+          recentCalls += 1;
+          if (recentCalls === 1) return jsonResponse({ detail: 'The read operation timed out' }, 502);
+          return jsonResponse([message('uid:11', '真实邮箱邮件', false)]);
+        }
+        if (url.startsWith('/api/insights?')) {
+          return jsonResponse([insight({ uid: 'uid:10', subject: '本地缓存邮件', importance: 'important' })]);
+        }
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    expect(await screen.findByText('本地缓存邮件')).toBeInTheDocument();
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: '重试' }));
+
+    expect(await screen.findByText('真实邮箱邮件')).toBeInTheDocument();
+    expect(screen.queryByText('本地缓存邮件')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('在全部页打开未读邮件后左侧基准列表同步更新为已读', async () => {
     installFetch({
       recent: [message('U1', '未读紧急', false)],

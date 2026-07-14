@@ -69,7 +69,12 @@ class MailClient:
             selected_uids = newest_first[offset : offset + limit]
             messages = []
             for uid in selected_uids:
-                message = self._fetch_uid(imap, uid)
+                try:
+                    message = self._fetch_uid_header(imap, uid)
+                except (imaplib.IMAP4.error, OSError, TimeoutError, ConnectionError):
+                    message = None
+                except Exception:
+                    message = None
                 if message is not None:
                     messages.append(message)
             return messages
@@ -342,6 +347,29 @@ class MailClient:
             message_id=_decode_header_value(parsed.get("Message-ID", "")),
             references=_decode_header_value(parsed.get("References", "")),
             size_bytes=len(raw_message),
+        )
+
+    def _fetch_uid_header(self, imap: imaplib.IMAP4_SSL, uid: bytes) -> MailMessage | None:
+        status, data = imap.uid("fetch", uid, "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])")
+        if status != "OK":
+            return None
+        raw_headers = _extract_raw_message(data)
+        if raw_headers is None:
+            return None
+        parsed = BytesParser(policy=policy.default).parsebytes(raw_headers)
+        return MailMessage(
+            id=f"uid:{uid.decode('ascii', errors='replace')}",
+            sender=_decode_header_value(parsed.get("From", "")),
+            recipient=_decode_header_value(parsed.get("To", "")),
+            subject=_decode_header_value(parsed.get("Subject", "(no subject)")),
+            body="",
+            date=_decode_header_value(parsed.get("Date", "")) or None,
+            snippet="邮件正文将在打开后读取。",
+            is_seen=_extract_seen_flag(data),
+            message_id=_decode_header_value(parsed.get("Message-ID", "")),
+            references=_decode_header_value(parsed.get("References", "")),
+            size_bytes=_extract_message_size(data),
+            content_truncated=True,
         )
 
     def _fetch_incremental_uid(self, imap: imaplib.IMAP4_SSL, uid: bytes) -> MailMessage | None:
