@@ -376,6 +376,25 @@ describe('MiaoGent workbench', () => {
             priority_reason: '人工更新标记。',
           }));
         }
+        if (url === '/api/rules/label' && init?.method === 'POST') {
+          return jsonResponse({
+            id: 1,
+            enabled: true,
+            mailbox: 'INBOX',
+            sender_pattern: 'example.com',
+            subject_keyword: '招聘沟通',
+            importance: 'important',
+            needs_reply: true,
+            privacy_level: 'sensitive',
+            source_uid: 'uid:10',
+            source_subject: '招聘沟通',
+            source_sender: 'hr@example.com',
+            match_count: 0,
+            last_matched_at: null,
+            created_at: '2026-07-10T08:09:00+08:00',
+            updated_at: '2026-07-10T08:09:00+08:00',
+          });
+        }
         return undefined;
       },
     });
@@ -407,6 +426,25 @@ describe('MiaoGent workbench', () => {
     expect(screen.getAllByText('重要').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('需要回复').length + screen.queryAllByText('待回复').length).toBeGreaterThan(0);
     expect(screen.getAllByText('敏感').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: '保存规则' }));
+    const dialog = await screen.findByRole('dialog', { name: '保存为本地纠错规则' });
+    expect(within(dialog).getByText('example.com')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: '保存规则' }));
+
+    await waitFor(() => {
+      const ruleCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/rules/label' && init?.method === 'POST');
+      expect(ruleCall).toBeTruthy();
+      expect(JSON.parse(String(ruleCall?.[1]?.body))).toMatchObject({
+        uid: 'uid:10',
+        mailbox: 'INBOX',
+        sender_pattern: 'example.com',
+        subject_keyword: '招聘沟通',
+        importance: 'important',
+        needs_reply: true,
+        privacy_level: 'sensitive',
+      });
+    });
   });
 
   it('右侧面板可以记录 AI 判断反馈', async () => {
@@ -796,14 +834,13 @@ describe('MiaoGent workbench', () => {
 
     await user.click(await screen.findByRole('tab', { name: '全部' }));
     const card = (await screen.findByText('未读紧急')).closest('article') as HTMLElement;
-    expect(within(card).getByText('未读')).toBeInTheDocument();
+    expect(within(card).getByLabelText('未读邮件')).toBeInTheDocument();
 
     await user.click(within(card).getByRole('button', { name: /未读紧急/ }));
     expect(await screen.findByText('已同步标记为已读。')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(within(card).getByText('已读')).toBeInTheDocument();
-      expect(within(card).queryByText('未读')).not.toBeInTheDocument();
+      expect(within(card).queryByLabelText('未读邮件')).not.toBeInTheDocument();
     });
   });
 
@@ -1593,12 +1630,10 @@ describe('MiaoGent workbench', () => {
     await user.click(await screen.findByRole('tab', { name: 'AI 待办' }));
     const card = (await screen.findByText('队列已读邮件')).closest('article');
     expect(card).not.toBeNull();
-    expect(within(card as HTMLElement).getByText('已读')).toBeInTheDocument();
-    expect(within(card as HTMLElement).queryByText('未读')).not.toBeInTheDocument();
+    expect(within(card as HTMLElement).queryByLabelText('未读邮件')).not.toBeInTheDocument();
     const unknownCard = screen.getByText('队列状态未知邮件').closest('article');
     expect(unknownCard).not.toBeNull();
-    expect(within(unknownCard as HTMLElement).queryByText('未读')).not.toBeInTheDocument();
-    expect(within(unknownCard as HTMLElement).queryByText('已读')).not.toBeInTheDocument();
+    expect(within(unknownCard as HTMLElement).queryByLabelText('未读邮件')).not.toBeInTheDocument();
   });
 
   it('秘书巡检确认固定契约，重复点击只发送一个请求', async () => {

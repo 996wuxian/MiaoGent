@@ -187,6 +187,24 @@ export type MailAiAudit = {
   body_policy: MailAiAuditSection;
 };
 
+export type UserLabelRule = {
+  id: number;
+  enabled: boolean;
+  mailbox: string;
+  sender_pattern: string;
+  subject_keyword: string;
+  importance: MailImportance;
+  needs_reply: boolean;
+  privacy_level: 'normal' | 'sensitive' | 'private' | string;
+  source_uid: string;
+  source_subject: string;
+  source_sender: string;
+  match_count: number;
+  last_matched_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type InsightFeedbackResponse = {
   id: number;
   mail_key: string;

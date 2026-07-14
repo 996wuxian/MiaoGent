@@ -7,7 +7,7 @@ from qq_mail_agent_cli.agent import MailAgent
 from qq_mail_agent_cli.mail_client import MailClient
 from qq_mail_agent_cli.models import MailMessage, TriageResult
 from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
-from qq_mail_agent_cli.storage import StateStore, StoredTriage
+from qq_mail_agent_cli.storage import StateStore, StoredTriage, analysis_error_from_privacy_level, apply_user_label_rule
 
 
 @dataclass(frozen=True)
@@ -104,6 +104,17 @@ class SecretaryInspectionService:
                 continue
 
             handled_uids.add(message.id)
+            rule = self._store.match_user_label_rule(message)
+            if rule is not None:
+                result = apply_user_label_rule(MailAgent().classify_title(message), rule)
+                self._store.save_triage(
+                    message,
+                    result,
+                    model="user-label-rule",
+                    analysis_error=analysis_error_from_privacy_level(rule.privacy_level),
+                )
+                processed_items[message.id] = _item_from_result(message, result)
+                continue
             privacy_verdict = should_block_ai(message, self._privacy_config)
             if privacy_verdict.sensitive:
                 summary_zh, reason, error_code = privacy_review_summary(privacy_verdict)

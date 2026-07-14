@@ -27,6 +27,8 @@ import {
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { ConfirmDialog } from './Dialogs';
 import { Badge, IconButton, InlineError, LoadingLine, SegmentedTabs } from './ui';
+import { api } from '../api';
+import type { UserLabelRule } from '../types';
 
 type FormState = {
   mailProvider: MailProvider;
@@ -223,6 +225,9 @@ export function DesktopSettings({
   const [updateFailure, setUpdateFailure] = useState('');
   const [availableUpdate, setAvailableUpdate] = useState<DesktopUpdateInfo | null>(null);
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [labelRules, setLabelRules] = useState<UserLabelRule[]>([]);
+  const [labelRulesLoading, setLabelRulesLoading] = useState(false);
+  const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -230,8 +235,8 @@ export function DesktopSettings({
     let disposed = false;
     setLoading(true);
     setError('');
-    void Promise.all([getDesktopConfig(), getAutostartStatus(), getDesktopStorageLocations(), getDesktopAppVersion()])
-      .then(([nextConfig, startup, locations, version]) => {
+    void Promise.all([getDesktopConfig(), getAutostartStatus(), getDesktopStorageLocations(), getDesktopAppVersion(), api.labelRules().catch(() => [])])
+      .then(([nextConfig, startup, locations, version, rules]) => {
         if (disposed) return;
         setConfig(nextConfig);
         setForm(formFromConfig(nextConfig));
@@ -241,6 +246,7 @@ export function DesktopSettings({
         setStorageLocations(locations);
         setDataRootDraft(locations.dataDirectoryRoot ?? '');
         setWebviewRootDraft(locations.webviewDataDirectoryRoot ?? '');
+        setLabelRules(rules);
       })
       .catch((loadError) => {
         if (!disposed) setError(errorMessage(loadError));
@@ -326,6 +332,30 @@ export function DesktopSettings({
       setError(errorMessage(saveError));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function reloadLabelRules() {
+    setLabelRulesLoading(true);
+    try {
+      setLabelRules(await api.labelRules());
+    } catch (loadError) {
+      setError(`本地纠错规则读取失败：${errorMessage(loadError)}`);
+    } finally {
+      setLabelRulesLoading(false);
+    }
+  }
+
+  async function deleteLabelRule(rule: UserLabelRule) {
+    setDeletingRuleId(rule.id);
+    try {
+      await api.deleteLabelRule(rule.id);
+      setLabelRules((current) => current.filter((item) => item.id !== rule.id));
+      onNotify?.('success', '本地纠错规则已删除。');
+    } catch (deleteError) {
+      setError(`删除本地纠错规则失败：${errorMessage(deleteError)}`);
+    } finally {
+      setDeletingRuleId(null);
     }
   }
 
@@ -644,6 +674,54 @@ export function DesktopSettings({
                   />
                   <span>{`保存时清除现有${mailProviderAuthCodeLabel(form.mailProvider)}`}</span>
                 </label>
+              )}
+            </section>
+
+            <section className="settings-section">
+              <div className="section-heading">
+                <div>
+                  <h3>本地纠错规则</h3>
+                  <p>手动保存的邮件标记规则会在后续同步和重新识别时优先生效。</p>
+                </div>
+                <button className="btn btn-secondary" type="button" disabled={labelRulesLoading} onClick={() => void reloadLabelRules()}>
+                  {labelRulesLoading ? '刷新中…' : '刷新规则'}
+                </button>
+              </div>
+              {labelRules.length === 0 ? (
+                <p className="settings-help">暂无本地纠错规则。修改邮件标记后，可从全局提示里点击“保存规则”。</p>
+              ) : (
+                <div className="label-rules-list">
+                  {labelRules.map((rule) => (
+                    <div className="label-rule-card" key={rule.id}>
+                      <div>
+                        <strong>{rule.source_subject || rule.subject_keyword || `规则 #${rule.id}`}</strong>
+                        <small>
+                          {rule.sender_pattern ? `发件人：${rule.sender_pattern}` : '发件人不限'}
+                          {' · '}
+                          {rule.subject_keyword ? `主题：${rule.subject_keyword}` : '主题不限'}
+                        </small>
+                        <small>
+                          标签：
+                          {rule.importance === 'urgent' ? '紧急' : rule.importance === 'important' ? '重要' : '一般'}
+                          {' · '}
+                          {rule.needs_reply ? '待回复' : '不需回复'}
+                          {' · '}
+                          {rule.privacy_level === 'private' ? '隐私' : rule.privacy_level === 'sensitive' ? '敏感' : '普通'}
+                          {' · '}
+                          已命中 {rule.match_count} 次
+                        </small>
+                      </div>
+                      <button
+                        className="btn btn-danger-outline"
+                        type="button"
+                        disabled={deletingRuleId === rule.id}
+                        onClick={() => void deleteLabelRule(rule)}
+                      >
+                        {deletingRuleId === rule.id ? '删除中…' : '删除'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
             </section>
 

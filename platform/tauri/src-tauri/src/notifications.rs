@@ -91,6 +91,7 @@ fn content_for(event: &str, payload: &Value) -> Option<NotificationContent> {
 
     if event != "important_mail"
         || payload.get("analysis_failed").and_then(Value::as_bool) == Some(true)
+        || payload.get("is_seen").and_then(Value::as_bool) == Some(true)
     {
         return None;
     }
@@ -321,6 +322,16 @@ mod tests {
                 "mail_key": "INBOX\u{1f}77\u{1f}uid:10",
                 "importance": "important",
                 "analysis_failed": true
+            })
+        )
+        .is_none());
+        assert!(content_for(
+            "important_mail",
+            &serde_json::json!({
+                "uid": "uid:11",
+                "mail_key": "INBOX\u{1f}77\u{1f}uid:11",
+                "importance": "important",
+                "is_seen": true
             })
         )
         .is_none());

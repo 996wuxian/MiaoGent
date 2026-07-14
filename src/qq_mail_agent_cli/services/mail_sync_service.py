@@ -11,7 +11,13 @@ from qq_mail_agent_cli.desktop_events import EventSink, NullEventSink
 from qq_mail_agent_cli.mail_client import IncrementalMailBatch, MailClient
 from qq_mail_agent_cli.models import MailMessage
 from qq_mail_agent_cli.privacy import PrivacyConfig, classify_mail_title_privacy, privacy_error_code
-from qq_mail_agent_cli.storage import StateStore, StoredMailInsight, StoredStartupSummary
+from qq_mail_agent_cli.storage import (
+    StateStore,
+    StoredMailInsight,
+    StoredStartupSummary,
+    analysis_error_from_privacy_level,
+    apply_user_label_rule,
+)
 
 
 class IncrementalMailClient(Protocol):
@@ -492,13 +498,20 @@ class MailSyncService:
         title_verdict = classify_mail_title_privacy(message.subject, self._privacy_config)
         classifier = getattr(self._agent, "classify_title", None)
         result = classifier(message) if callable(classifier) else MailAgent().classify_title(message)
+        rule = self._store.match_user_label_rule(message, mailbox=self._mailbox)
+        analysis_error = privacy_error_code(title_verdict)
+        model = "title-rules"
+        if rule is not None:
+            result = apply_user_label_rule(result, rule)
+            analysis_error = analysis_error_from_privacy_level(rule.privacy_level)
+            model = "user-label-rule"
         self._store.save_title_classification(
             message,
             result,
-            model="title-rules",
+            model=model,
             uid_validity=uid_validity,
             mailbox=self._mailbox,
-            analysis_error=privacy_error_code(title_verdict),
+            analysis_error=analysis_error,
         )
 
         insight = self._store.get_mail_insight(
@@ -556,6 +569,8 @@ class MailSyncService:
         *,
         source: str,
     ) -> None:
+        if insight.is_seen is True:
+            return
         if insight.notification_status == "notified":
             return
         if insight.notification_status == "failed":
@@ -702,6 +717,7 @@ def _event_payload(insight: StoredMailInsight, *, source: str | None = None) -> 
         "uid": insight.uid,
         "sender": insight.sender,
         "subject": insight.subject,
+        "is_seen": insight.is_seen,
         "importance": insight.importance,
         "needs_reply": insight.needs_reply,
         "summary_zh": insight.summary_zh,

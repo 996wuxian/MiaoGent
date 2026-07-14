@@ -8,9 +8,18 @@ from pathlib import Path
 import sqlite3
 from collections.abc import Iterator
 import time
+import re
 from uuid import uuid4
 
-from qq_mail_agent_cli.models import Draft, MailClassification, MailImportance, MailMessage, MailSummary, TriageResult
+from qq_mail_agent_cli.models import (
+    Draft,
+    MailClassification,
+    MailImportance,
+    MailMessage,
+    MailSummary,
+    SuggestedAction,
+    TriageResult,
+)
 
 
 @dataclass(frozen=True)
@@ -167,8 +176,27 @@ class RecognitionCacheResetReport:
         )
 
 
+@dataclass(frozen=True)
+class StoredUserLabelRule:
+    id: int
+    enabled: bool
+    mailbox: str
+    sender_pattern: str
+    subject_keyword: str
+    importance: str
+    needs_reply: bool
+    privacy_level: str
+    source_uid: str
+    source_subject: str
+    source_sender: str
+    match_count: int
+    last_matched_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class StateStore:
-    _SCHEMA_VERSION = 4
+    _SCHEMA_VERSION = 8
 
     def __init__(self, db_path: Path):
         self._db_path = db_path
@@ -212,17 +240,18 @@ class StateStore:
                 mail_key = _mail_key(mailbox, uid_validity, message.id)
                 conn.execute(
                     """
-                    INSERT INTO mail_generation_items(
+                INSERT INTO mail_generation_items(
                         mail_key, uid, mailbox, source_uidvalidity, sender,
-                        recipient, subject, date, is_seen, created_at, updated_at
+                        recipient, subject, date, is_seen, message_id, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(mail_key) DO UPDATE SET
                         sender=excluded.sender,
                         recipient=excluded.recipient,
                         subject=excluded.subject,
                         date=excluded.date,
                         is_seen=excluded.is_seen,
+                        message_id=excluded.message_id,
                         updated_at=excluded.updated_at
                     """,
                     (
@@ -235,10 +264,34 @@ class StateStore:
                         message.subject,
                         message.date,
                         _bool_to_int(message.is_seen),
+                        message.message_id or "",
                         now,
                         now,
                     ),
                 )
+
+    def mark_mail_seen(self, uid: str) -> bool:
+        uid_values = _uid_lookup_values(uid)
+        placeholders = ", ".join("?" for _ in uid_values)
+        now = _now()
+        with self._connect() as conn:
+            mail_items = conn.execute(
+                f"""
+                UPDATE mail_items
+                SET is_seen = 1, updated_at = ?
+                WHERE uid IN ({placeholders})
+                """,
+                (now, *uid_values),
+            ).rowcount
+            generation_items = conn.execute(
+                f"""
+                UPDATE mail_generation_items
+                SET is_seen = 1, updated_at = ?
+                WHERE uid IN ({placeholders})
+                """,
+                (now, *uid_values),
+            ).rowcount
+        return (mail_items + generation_items) > 0
 
     def save_triage(
         self,
@@ -248,17 +301,22 @@ class StateStore:
         model: str,
         uid_validity: int | None = None,
         mailbox: str = "INBOX",
+        analysis_error: str | None = None,
     ) -> None:
         now = _now()
         importance, needs_reply = _effective_insight(result)
         source_uidvalidity = uid_validity or 0
         mail_key = _mail_key(mailbox, source_uidvalidity, message.id)
+        label_source = "user" if model in {"user-label-manual", "user-label-rule"} else "ai"
         self.upsert_mail(
             message,
             uid_validity=source_uidvalidity,
             mailbox=mailbox,
         )
         with self._connect() as conn:
+            if label_source != "user" and _has_matching_user_label_decision(conn, message, mailbox):
+                _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=source_uidvalidity, now=now)
+                return
             conn.execute(
                 """
                 INSERT INTO triage_results(
@@ -349,12 +407,13 @@ class StateStore:
                     reply_status,
                     notification_status,
                     analysis_error,
+                    label_source,
                     draft_id,
                     analyzed_at,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed', ?, ?, NULL, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed', ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(mail_key) DO UPDATE SET
                     importance=excluded.importance,
                     needs_reply=excluded.needs_reply,
@@ -365,7 +424,8 @@ class StateStore:
                     analysis_status='analyzed',
                     reply_status=excluded.reply_status,
                     notification_status=excluded.notification_status,
-                    analysis_error=NULL,
+                    analysis_error=excluded.analysis_error,
+                    label_source=excluded.label_source,
                     draft_id=COALESCE(mail_insights.draft_id, excluded.draft_id),
                     analyzed_at=excluded.analyzed_at,
                     updated_at=excluded.updated_at
@@ -383,6 +443,8 @@ class StateStore:
                     result.priority_reason or result.reason,
                     reply_status,
                     notification_status,
+                    analysis_error,
+                    label_source,
                     previous_draft_id,
                     now,
                     now,
@@ -401,6 +463,9 @@ class StateStore:
         now = _now()
         mail_key = _mail_key(mailbox, uid_validity, message.id)
         with self._connect() as conn:
+            if _has_matching_user_label_decision(conn, message, mailbox):
+                _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=uid_validity, now=now)
+                return
             conn.execute(
                 """
                 INSERT INTO mail_insights(
@@ -435,6 +500,9 @@ class StateStore:
         mail_key = _mail_key(mailbox, uid_validity, message.id)
         importance, needs_reply = _effective_insight(result)
         with self._connect() as conn:
+            if model not in {"user-label-manual", "user-label-rule"} and _has_matching_user_label_decision(conn, message, mailbox):
+                _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=uid_validity, now=now)
+                return
             conn.execute(
                 """
                 INSERT INTO triage_results(
@@ -653,6 +721,9 @@ class StateStore:
         mail_key = _mail_key(mailbox, uid_validity, message.id)
         safe_error = f"{error.__class__.__name__}: 本封邮件分析失败，请稍后重试"
         with self._connect() as conn:
+            if _has_matching_user_label_decision(conn, message, mailbox):
+                _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=uid_validity, now=now)
+                return
             conn.execute(
                 """
                 INSERT INTO mail_insights(
@@ -698,6 +769,9 @@ class StateStore:
         now = _now()
         mail_key = _mail_key(mailbox, uid_validity, message.id)
         with self._connect() as conn:
+            if _has_matching_user_label_decision(conn, message, mailbox):
+                _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=uid_validity, now=now)
+                return
             conn.execute(
                 """
                 INSERT INTO mail_insights(
@@ -875,6 +949,8 @@ class StateStore:
                   AND i.confidence >= 0.55
                   AND i.importance IN ('important', 'urgent')
                   AND i.notification_status IN ({placeholders})
+                  AND COALESCE(g.is_seen, 0) != 1
+                  AND COALESCE(m.is_seen, 0) != 1
                 ORDER BY i.updated_at ASC, i.rowid ASC
                 LIMIT ?
                 """,
@@ -914,7 +990,11 @@ class StateStore:
                     g.sender,
                     g.subject,
                     g.date,
-                    g.is_seen,
+                    CASE
+                        WHEN COALESCE(g.is_seen, 0) = 1 OR COALESCE(m.is_seen, 0) = 1 THEN 1
+                        WHEN g.is_seen = 0 OR m.is_seen = 0 THEN 0
+                        ELSE NULL
+                    END,
                     i.importance,
                     i.needs_reply,
                     i.summary_zh,
@@ -931,6 +1011,7 @@ class StateStore:
                     t.queue_status
                 FROM mail_insights i
                 LEFT JOIN mail_generation_items g ON g.mail_key = i.mail_key
+                LEFT JOIN mail_items m ON m.uid = i.uid
                 LEFT JOIN triage_results t ON t.uid = i.uid
                 LEFT JOIN mailbox_sync_state s ON s.mailbox = i.mailbox
         """
@@ -976,10 +1057,18 @@ class StateStore:
         if mail_key is None:
             return None
         now = _now()
+        classification = _classification_from_labels(importance=MailImportance(importance), needs_reply=needs_reply)
+        suggested_action = _suggested_action_for_classification(classification)
+        queue_status = "pending" if classification != MailClassification.IGNORE else "done"
+        manual_reason = _manual_label_reason(
+            importance=importance,
+            needs_reply=needs_reply,
+            privacy_level=privacy_level,
+        )
         with self._connect() as conn:
             current = conn.execute(
                 """
-                SELECT reply_status, notification_status
+                SELECT reply_status, notification_status, mailbox, source_uidvalidity
                 FROM mail_insights
                 WHERE mail_key = ?
                 """,
@@ -989,6 +1078,8 @@ class StateStore:
                 return None
             reply_status = str(current[0])
             notification_status = str(current[1])
+            current_mailbox = str(current[2] or mailbox)
+            current_uidvalidity = int(current[3] or 0)
             if needs_reply and reply_status == "not_needed":
                 reply_status = "needs_reply"
             elif not needs_reply and reply_status != "sent":
@@ -1002,15 +1093,19 @@ class StateStore:
                 UPDATE mail_insights
                 SET importance = ?,
                     needs_reply = ?,
+                    confidence = MAX(confidence, 0.95),
+                    priority_reason = ?,
                     reply_status = ?,
                     notification_status = ?,
                     analysis_error = CASE WHEN ? THEN ? ELSE analysis_error END,
+                    label_source = 'user',
                     updated_at = ?
                 WHERE mail_key = ?
                 """,
                 (
                     importance,
                     _bool_to_int(needs_reply),
+                    manual_reason,
                     reply_status,
                     notification_status,
                     _bool_to_int(update_privacy),
@@ -1019,7 +1114,198 @@ class StateStore:
                     mail_key,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO triage_results(
+                    uid,
+                    classification,
+                    reason,
+                    suggested_action,
+                    action_reason,
+                    queue_status,
+                    queue_status_updated_at,
+                    mailbox,
+                    source_uidvalidity,
+                    model,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uid) DO UPDATE SET
+                    classification=excluded.classification,
+                    reason=excluded.reason,
+                    suggested_action=excluded.suggested_action,
+                    action_reason=excluded.action_reason,
+                    queue_status=excluded.queue_status,
+                    queue_status_updated_at=excluded.queue_status_updated_at,
+                    mailbox=excluded.mailbox,
+                    source_uidvalidity=excluded.source_uidvalidity,
+                    model=excluded.model,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    uid,
+                    classification.value,
+                    manual_reason,
+                    suggested_action.value,
+                    manual_reason,
+                    queue_status,
+                    now,
+                    current_mailbox,
+                    current_uidvalidity,
+                    "user-label-manual",
+                    now,
+                    now,
+                ),
+            )
+            identity = conn.execute(
+                """
+                SELECT
+                    COALESCE(g.sender, m.sender, ''),
+                    COALESCE(g.subject, m.subject, ''),
+                    COALESCE(g.message_id, '')
+                FROM mail_insights i
+                LEFT JOIN mail_generation_items g ON g.mail_key = i.mail_key
+                LEFT JOIN mail_items m ON m.uid = i.uid
+                WHERE i.mail_key = ?
+                """,
+                (mail_key,),
+            ).fetchone()
+            _upsert_user_mail_label_decision(
+                conn,
+                uid=uid,
+                mailbox=current_mailbox,
+                mail_key=mail_key,
+                sender=str(identity[0] or "") if identity else "",
+                subject=str(identity[1] or "") if identity else "",
+                message_id=str(identity[2] or "") if identity else "",
+                importance=importance,
+                needs_reply=needs_reply,
+                privacy_level=privacy_level or "normal",
+                now=now,
+            )
         return self.get_mail_insight(uid, uid_validity=uid_validity, mailbox=mailbox)
+
+    def create_user_label_rule(
+        self,
+        *,
+        mailbox: str = "INBOX",
+        sender_pattern: str = "",
+        subject_keyword: str = "",
+        importance: str,
+        needs_reply: bool,
+        privacy_level: str,
+        source_uid: str = "",
+        source_subject: str = "",
+        source_sender: str = "",
+    ) -> StoredUserLabelRule:
+        _validate_importance(importance)
+        _validate_privacy_level(privacy_level)
+        clean_sender = _clean_rule_text(sender_pattern)
+        clean_subject = _clean_rule_text(subject_keyword)
+        if not clean_sender and not clean_subject:
+            raise ValueError("规则至少需要发件人或主题关键词")
+        now = _now()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO user_label_rules(
+                    enabled,
+                    mailbox,
+                    sender_pattern,
+                    subject_keyword,
+                    importance,
+                    needs_reply,
+                    privacy_level,
+                    source_uid,
+                    source_subject,
+                    source_sender,
+                    created_at,
+                    updated_at
+                )
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mailbox or "INBOX",
+                    clean_sender,
+                    clean_subject,
+                    importance,
+                    _bool_to_int(needs_reply),
+                    privacy_level,
+                    source_uid or "",
+                    source_subject or "",
+                    source_sender or "",
+                    now,
+                    now,
+                ),
+            )
+            rule_id = int(cursor.lastrowid)
+        rule = self.get_user_label_rule(rule_id)
+        assert rule is not None
+        return rule
+
+    def get_user_label_rule(self, rule_id: int) -> StoredUserLabelRule | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, enabled, mailbox, sender_pattern, subject_keyword,
+                       importance, needs_reply, privacy_level, source_uid,
+                       source_subject, source_sender, match_count, last_matched_at,
+                       created_at, updated_at
+                FROM user_label_rules
+                WHERE id = ?
+                """,
+                (rule_id,),
+            ).fetchone()
+        return _stored_user_label_rule(row) if row else None
+
+    def list_user_label_rules(self, *, include_disabled: bool = False, limit: int = 100) -> list[StoredUserLabelRule]:
+        where = "" if include_disabled else "WHERE enabled = 1"
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, enabled, mailbox, sender_pattern, subject_keyword,
+                       importance, needs_reply, privacy_level, source_uid,
+                       source_subject, source_sender, match_count, last_matched_at,
+                       created_at, updated_at
+                FROM user_label_rules
+                {where}
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_stored_user_label_rule(row) for row in rows]
+
+    def delete_user_label_rule(self, rule_id: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM user_label_rules WHERE id = ?", (rule_id,))
+            return cursor.rowcount > 0
+
+    def match_user_label_rule(self, message: MailMessage, *, mailbox: str = "INBOX") -> StoredUserLabelRule | None:
+        candidates = self.list_user_label_rules(limit=500)
+        sender = (message.sender or "").lower()
+        subject = (message.subject or "").lower()
+        for rule in candidates:
+            if rule.mailbox not in {"", "*", mailbox}:
+                continue
+            sender_ok = not rule.sender_pattern or rule.sender_pattern.lower() in sender
+            subject_ok = not rule.subject_keyword or rule.subject_keyword.lower() in subject
+            if sender_ok and subject_ok:
+                now = _now()
+                with self._connect() as conn:
+                    conn.execute(
+                        """
+                        UPDATE user_label_rules
+                        SET match_count = match_count + 1,
+                            last_matched_at = ?,
+                            updated_at = updated_at
+                        WHERE id = ?
+                        """,
+                        (now, rule.id),
+                    )
+                return self.get_user_label_rule(rule.id) or rule
+        return None
 
     def save_mail_insight_feedback(
         self,
@@ -1470,23 +1756,28 @@ class StateStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             counts: dict[str, int] = {}
-            for table in (
-                "mail_insight_feedback",
-                "mail_insights",
-                "triage_results",
-                "mail_fetch_failures",
-                "desktop_summaries",
-                "mailbox_sync_state",
-                "sync_leases",
-            ):
-                cursor = conn.execute(f"DELETE FROM {table}")
-                counts[table] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM mail_insight_feedback")
+            counts["mail_insight_feedback"] = max(cursor.rowcount, 0)
+            cursor = conn.execute(
+                "DELETE FROM triage_results WHERE COALESCE(model, '') NOT IN ('user-label-manual', 'user-label-rule')"
+            )
+            counts["triage_results"] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM mail_insights WHERE COALESCE(label_source, 'ai') != 'user'")
+            counts["mail_insights"] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM mail_fetch_failures")
+            counts["mail_fetch_failures"] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM desktop_summaries")
+            counts["desktop_summaries"] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM mailbox_sync_state")
+            counts["mailbox_sync_state"] = max(cursor.rowcount, 0)
+            cursor = conn.execute("DELETE FROM sync_leases")
+            counts["sync_leases"] = max(cursor.rowcount, 0)
             conn.execute(
                 "INSERT INTO action_log(uid, action, detail, created_at) VALUES (?, ?, ?, ?)",
                 (
                     None,
                     "reset_recognition_cache",
-                    "Cleared local AI labels, reply markers, privacy markers, queue state, feedback, fetch failures and sync cursor.",
+                    "Cleared local AI labels, reply markers, privacy markers, queue state, feedback, fetch failures and sync cursor; preserved manual label decisions.",
                     _now(),
                 ),
             )
@@ -2184,6 +2475,7 @@ class StateStore:
                     reply_status TEXT NOT NULL DEFAULT 'review_required',
                     notification_status TEXT NOT NULL DEFAULT 'pending',
                     analysis_error TEXT,
+                    label_source TEXT NOT NULL DEFAULT 'ai',
                     draft_id TEXT,
                     analyzed_at TEXT,
                     created_at TEXT NOT NULL,
@@ -2214,6 +2506,7 @@ class StateStore:
                     subject TEXT,
                     date TEXT,
                     is_seen INTEGER,
+                    message_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(mailbox, source_uidvalidity, uid)
@@ -2262,6 +2555,49 @@ class StateStore:
                     resolved_at TEXT,
                     UNIQUE(mailbox, uid_validity, uid)
                 );
+
+                CREATE TABLE IF NOT EXISTS user_label_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    mailbox TEXT NOT NULL DEFAULT 'INBOX',
+                    sender_pattern TEXT NOT NULL DEFAULT '',
+                    subject_keyword TEXT NOT NULL DEFAULT '',
+                    importance TEXT NOT NULL DEFAULT 'general',
+                    needs_reply INTEGER NOT NULL DEFAULT 0,
+                    privacy_level TEXT NOT NULL DEFAULT 'normal',
+                    source_uid TEXT NOT NULL DEFAULT '',
+                    source_subject TEXT NOT NULL DEFAULT '',
+                    source_sender TEXT NOT NULL DEFAULT '',
+                    match_count INTEGER NOT NULL DEFAULT 0,
+                    last_matched_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_label_rules_enabled
+                ON user_label_rules(enabled, mailbox, updated_at);
+
+                CREATE TABLE IF NOT EXISTS user_mail_label_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    mailbox TEXT NOT NULL DEFAULT 'INBOX',
+                    uid TEXT NOT NULL,
+                    message_id TEXT NOT NULL DEFAULT '',
+                    sender_key TEXT NOT NULL DEFAULT '',
+                    subject_key TEXT NOT NULL DEFAULT '',
+                    importance TEXT NOT NULL DEFAULT 'general',
+                    needs_reply INTEGER NOT NULL DEFAULT 0,
+                    privacy_level TEXT NOT NULL DEFAULT 'normal',
+                    source_mail_key TEXT NOT NULL DEFAULT '',
+                    apply_count INTEGER NOT NULL DEFAULT 0,
+                    last_applied_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(mailbox, uid)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_mail_label_decisions_lookup
+                ON user_mail_label_decisions(enabled, mailbox, uid, updated_at);
                 """
             )
             _ensure_column(conn, "drafts", "body", "TEXT")
@@ -2285,12 +2621,38 @@ class StateStore:
             _ensure_column(conn, "triage_results", "queue_status_updated_at", "TEXT")
             _ensure_column(conn, "triage_results", "mailbox", "TEXT DEFAULT 'INBOX'")
             _ensure_column(conn, "triage_results", "source_uidvalidity", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "mail_generation_items", "message_id", "TEXT DEFAULT ''")
             _ensure_column(conn, "desktop_summaries", "delivery_status", "TEXT DEFAULT 'pending'")
             _ensure_column(conn, "desktop_summaries", "emitted_at", "TEXT")
             _ensure_column(conn, "desktop_summaries", "acknowledged_at", "TEXT")
             _ensure_column(conn, "mail_insight_feedback", "comment", "TEXT DEFAULT ''")
             _ensure_column(conn, "mail_insight_feedback", "importance_at_feedback", "TEXT")
             _ensure_column(conn, "mail_insight_feedback", "needs_reply_at_feedback", "INTEGER")
+            _ensure_column(conn, "mail_insights", "label_source", "TEXT DEFAULT 'ai'")
+            _ensure_column(conn, "user_label_rules", "enabled", "INTEGER DEFAULT 1")
+            _ensure_column(conn, "user_label_rules", "mailbox", "TEXT DEFAULT 'INBOX'")
+            _ensure_column(conn, "user_label_rules", "sender_pattern", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_label_rules", "subject_keyword", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_label_rules", "importance", "TEXT DEFAULT 'general'")
+            _ensure_column(conn, "user_label_rules", "needs_reply", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "user_label_rules", "privacy_level", "TEXT DEFAULT 'normal'")
+            _ensure_column(conn, "user_label_rules", "source_uid", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_label_rules", "source_subject", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_label_rules", "source_sender", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_label_rules", "match_count", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "user_label_rules", "last_matched_at", "TEXT")
+            _ensure_column(conn, "user_mail_label_decisions", "enabled", "INTEGER DEFAULT 1")
+            _ensure_column(conn, "user_mail_label_decisions", "mailbox", "TEXT DEFAULT 'INBOX'")
+            _ensure_column(conn, "user_mail_label_decisions", "uid", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_mail_label_decisions", "message_id", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_mail_label_decisions", "sender_key", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_mail_label_decisions", "subject_key", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_mail_label_decisions", "importance", "TEXT DEFAULT 'general'")
+            _ensure_column(conn, "user_mail_label_decisions", "needs_reply", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "user_mail_label_decisions", "privacy_level", "TEXT DEFAULT 'normal'")
+            _ensure_column(conn, "user_mail_label_decisions", "source_mail_key", "TEXT DEFAULT ''")
+            _ensure_column(conn, "user_mail_label_decisions", "apply_count", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "user_mail_label_decisions", "last_applied_at", "TEXT")
             conn.execute(
                 """
                 UPDATE drafts
@@ -2316,6 +2678,16 @@ def _bool_to_int(value: bool | None) -> int | None:
     return 1 if value else 0
 
 
+def _uid_lookup_values(uid: str) -> tuple[str, ...]:
+    value = uid.strip()
+    values = [value]
+    if value.startswith("uid:"):
+        values.append(value[4:])
+    elif value:
+        values.append(f"uid:{value}")
+    return tuple(dict.fromkeys(item for item in values if item))
+
+
 def _int_to_bool(value: int | None) -> bool | None:
     if value is None:
         return None
@@ -2337,6 +2709,11 @@ def _validate_queue_status(status: str) -> None:
 def _validate_importance(value: str) -> None:
     if value not in {item.value for item in MailImportance}:
         raise ValueError(f"Unknown importance: {value}")
+
+
+def _validate_privacy_level(value: str) -> None:
+    if value not in {"normal", "sensitive", "private"}:
+        raise ValueError(f"Unknown privacy level: {value}")
 
 
 def _analysis_error_from_privacy_level(value: str | None) -> str | None:
@@ -2388,6 +2765,65 @@ def _effective_insight(result: TriageResult) -> tuple[MailImportance, bool]:
     return importance, needs_reply
 
 
+def apply_user_label_rule(result: TriageResult, rule: StoredUserLabelRule) -> TriageResult:
+    importance = MailImportance(rule.importance)
+    classification = _classification_from_labels(importance=importance, needs_reply=rule.needs_reply)
+    reason = f"命中本地用户规则：{_rule_match_label(rule)}。"
+    priority_reason = reason if not result.priority_reason else f"{reason} 原判断：{result.priority_reason}"
+    return TriageResult(
+        mail_id=result.mail_id,
+        classification=classification,
+        reason=reason,
+        suggested_action=_suggested_action_for_classification(classification),
+        action_reason=reason,
+        importance=importance,
+        needs_reply=rule.needs_reply,
+        summary_zh=result.summary_zh,
+        action_items=result.action_items,
+        confidence=max(result.confidence, 0.95),
+        priority_reason=priority_reason,
+    )
+
+
+def analysis_error_from_privacy_level(value: str | None) -> str | None:
+    return _analysis_error_from_privacy_level(value)
+
+
+def _classification_from_labels(*, importance: MailImportance, needs_reply: bool) -> MailClassification:
+    if needs_reply:
+        return MailClassification.RESPOND
+    if importance != MailImportance.GENERAL:
+        return MailClassification.NOTIFY
+    return MailClassification.IGNORE
+
+
+def _suggested_action_for_classification(classification: MailClassification) -> SuggestedAction:
+    if classification == MailClassification.RESPOND:
+        return SuggestedAction.DRAFT_REPLY
+    if classification == MailClassification.NOTIFY:
+        return SuggestedAction.READ_FULL
+    return SuggestedAction.NO_ACTION
+
+
+def _manual_label_reason(*, importance: str, needs_reply: bool, privacy_level: str | None) -> str:
+    parts = [
+        f"重要性={importance}",
+        f"回复={'待回复' if needs_reply else '不需回复'}",
+    ]
+    if privacy_level:
+        parts.append(f"隐私={privacy_level}")
+    return "用户手动标记：" + "，".join(parts) + "。"
+
+
+def _rule_match_label(rule: StoredUserLabelRule) -> str:
+    parts = []
+    if rule.sender_pattern:
+        parts.append("发件人")
+    if rule.subject_keyword:
+        parts.append("主题关键词")
+    return " + ".join(parts) or f"规则 #{rule.id}"
+
+
 def _clamp_confidence(value: float) -> float:
     try:
         return max(0.0, min(1.0, float(value)))
@@ -2397,6 +2833,364 @@ def _clamp_confidence(value: float) -> float:
 
 def _mail_key(mailbox: str, uid_validity: int, uid: str) -> str:
     return f"{mailbox}\x1f{uid_validity}\x1f{uid}"
+
+
+def _clean_rule_text(value: str) -> str:
+    return " ".join((value or "").strip().split())[:160]
+
+
+def _upsert_user_mail_label_decision(
+    conn: sqlite3.Connection,
+    *,
+    uid: str,
+    mailbox: str,
+    mail_key: str,
+    sender: str,
+    subject: str,
+    message_id: str,
+    importance: str,
+    needs_reply: bool,
+    privacy_level: str,
+    now: str,
+) -> None:
+    _validate_importance(importance)
+    _validate_privacy_level(privacy_level)
+    conn.execute(
+        """
+        INSERT INTO user_mail_label_decisions(
+            enabled,
+            mailbox,
+            uid,
+            message_id,
+            sender_key,
+            subject_key,
+            importance,
+            needs_reply,
+            privacy_level,
+            source_mail_key,
+            created_at,
+            updated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(mailbox, uid) DO UPDATE SET
+            enabled=1,
+            message_id=excluded.message_id,
+            sender_key=excluded.sender_key,
+            subject_key=excluded.subject_key,
+            importance=excluded.importance,
+            needs_reply=excluded.needs_reply,
+            privacy_level=excluded.privacy_level,
+            source_mail_key=excluded.source_mail_key,
+            updated_at=excluded.updated_at
+        """,
+        (
+            mailbox or "INBOX",
+            uid,
+            _normalized_mail_message_id_key(message_id),
+            _normalized_mail_sender_key(sender),
+            _normalized_mail_subject_key(subject),
+            importance,
+            _bool_to_int(needs_reply),
+            privacy_level,
+            mail_key,
+            now,
+            now,
+        ),
+    )
+
+
+def _has_matching_user_label_decision(conn: sqlite3.Connection, message: MailMessage, mailbox: str) -> bool:
+    return _matching_user_label_decision_row(conn, message, mailbox) is not None
+
+
+def _matching_user_label_decision_row(
+    conn: sqlite3.Connection,
+    message: MailMessage,
+    mailbox: str,
+) -> tuple[object, ...] | None:
+    decision = _matching_user_mail_label_decision_row(conn, message, mailbox)
+    if decision is not None:
+        return _user_mail_label_decision_to_label_row(decision)
+
+    sender = _normalized_mail_sender_key(message.sender)
+    subject = _normalized_mail_subject_key(message.subject)
+    message_id = _normalized_mail_message_id_key(message.message_id)
+    if not message_id and not sender and not subject:
+        return None
+    rows = conn.execute(
+        """
+        SELECT
+            i.importance,
+            i.needs_reply,
+            i.summary_zh,
+            i.action_items_json,
+            i.confidence,
+            i.priority_reason,
+            i.reply_status,
+            i.notification_status,
+            i.analysis_error,
+            i.draft_id,
+            COALESCE(t.queue_status, 'pending'),
+            COALESCE(g.message_id, ''),
+            COALESCE(g.sender, m.sender, '') AS stored_sender,
+            COALESCE(g.subject, m.subject, '') AS stored_subject
+        FROM mail_insights i
+        LEFT JOIN mail_generation_items g ON g.mail_key = i.mail_key
+        LEFT JOIN mail_items m ON m.uid = i.uid
+        LEFT JOIN triage_results t ON t.uid = i.uid
+        WHERE i.uid = ?
+          AND i.mailbox = ?
+          AND COALESCE(i.label_source, 'ai') = 'user'
+        ORDER BY i.updated_at DESC, i.rowid DESC
+        LIMIT 50
+        """,
+        (message.id, mailbox),
+    ).fetchall()
+    for row in rows:
+        stored_message_id = _normalized_mail_message_id_key(str(row[11] or ""))
+        stored_sender = _normalized_mail_sender_key(str(row[12] or ""))
+        stored_subject = _normalized_mail_subject_key(str(row[13] or ""))
+        if (message_id and stored_message_id and stored_message_id == message_id) or (
+            stored_sender == sender and stored_subject == subject
+        ):
+            return row[:11]
+    return None
+
+
+def _matching_user_mail_label_decision_row(
+    conn: sqlite3.Connection,
+    message: MailMessage,
+    mailbox: str,
+) -> tuple[object, ...] | None:
+    current_message_id = _normalized_mail_message_id_key(message.message_id)
+    current_sender = _normalized_mail_sender_key(message.sender)
+    current_subject = _normalized_mail_subject_key(message.subject)
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            mailbox,
+            uid,
+            message_id,
+            sender_key,
+            subject_key,
+            importance,
+            needs_reply,
+            privacy_level
+        FROM user_mail_label_decisions
+        WHERE enabled = 1
+          AND uid = ?
+          AND mailbox IN (?, '', '*')
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 20
+        """,
+        (message.id, mailbox),
+    ).fetchall()
+    fallback_uid_only: tuple[object, ...] | None = None
+    for row in rows:
+        stored_message_id = str(row[3] or "")
+        stored_sender = str(row[4] or "")
+        stored_subject = str(row[5] or "")
+        if current_message_id and stored_message_id:
+            if stored_message_id == current_message_id:
+                return row
+            continue
+        if stored_message_id:
+            continue
+        has_stored_identity = bool(stored_sender or stored_subject)
+        has_current_identity = bool(current_sender or current_subject)
+        if has_stored_identity and has_current_identity:
+            sender_ok = not stored_sender or stored_sender == current_sender
+            subject_ok = not stored_subject or stored_subject == current_subject
+            if sender_ok and subject_ok:
+                return row
+            continue
+        if not has_stored_identity:
+            fallback_uid_only = fallback_uid_only or row
+    return fallback_uid_only
+
+
+def _user_mail_label_decision_to_label_row(row: tuple[object, ...]) -> tuple[object, ...]:
+    importance = str(row[6] or MailImportance.GENERAL.value)
+    needs_reply = bool(row[7])
+    privacy_level = str(row[8] or "normal")
+    classification = _classification_from_labels(importance=MailImportance(importance), needs_reply=needs_reply)
+    reason = _manual_label_reason(importance=importance, needs_reply=needs_reply, privacy_level=privacy_level)
+    return (
+        importance,
+        _bool_to_int(needs_reply),
+        reason,
+        "[]",
+        0.95,
+        reason,
+        "needs_reply" if needs_reply else "not_needed",
+        "pending" if importance != MailImportance.GENERAL.value else "not_required",
+        _analysis_error_from_privacy_level(privacy_level),
+        None,
+        "pending" if classification != MailClassification.IGNORE else "done",
+    )
+
+
+def _copy_matching_user_label_decision(
+    conn: sqlite3.Connection,
+    message: MailMessage,
+    *,
+    mailbox: str,
+    uid_validity: int,
+    now: str,
+) -> None:
+    row = _matching_user_label_decision_row(conn, message, mailbox)
+    if row is None:
+        return
+    importance = str(row[0] or MailImportance.GENERAL.value)
+    needs_reply = bool(row[1])
+    summary_zh = str(row[2] or "")
+    action_items_json = str(row[3] or "[]")
+    confidence = _clamp_confidence(row[4])
+    priority_reason = str(row[5] or _manual_label_reason(importance=importance, needs_reply=needs_reply, privacy_level=None))
+    reply_status = str(row[6] or ("needs_reply" if needs_reply else "not_needed"))
+    notification_status = str(row[7] or ("pending" if importance != MailImportance.GENERAL.value else "not_required"))
+    analysis_error = row[8] if isinstance(row[8], str) else None
+    draft_id = row[9] if isinstance(row[9], str) else None
+    queue_status = str(row[10] or "pending")
+    mail_key = _mail_key(mailbox, uid_validity, message.id)
+    classification = _classification_from_labels(importance=MailImportance(importance), needs_reply=needs_reply)
+    suggested_action = _suggested_action_for_classification(classification)
+    conn.execute(
+        """
+        INSERT INTO triage_results(
+            uid,
+            classification,
+            reason,
+            suggested_action,
+            action_reason,
+            queue_status,
+            queue_status_updated_at,
+            mailbox,
+            source_uidvalidity,
+            model,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user-label-manual', ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET
+            classification=excluded.classification,
+            reason=excluded.reason,
+            suggested_action=excluded.suggested_action,
+            action_reason=excluded.action_reason,
+            queue_status=excluded.queue_status,
+            queue_status_updated_at=excluded.queue_status_updated_at,
+            mailbox=excluded.mailbox,
+            source_uidvalidity=excluded.source_uidvalidity,
+            model=excluded.model,
+            updated_at=excluded.updated_at
+        """,
+        (
+            message.id,
+            classification.value,
+            priority_reason,
+            suggested_action.value,
+            priority_reason,
+            queue_status,
+            now,
+            mailbox,
+            uid_validity,
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO mail_insights(
+            mail_key,
+            uid,
+            mailbox,
+            source_uidvalidity,
+            importance,
+            needs_reply,
+            summary_zh,
+            action_items_json,
+            confidence,
+            priority_reason,
+            analysis_status,
+            reply_status,
+            notification_status,
+            analysis_error,
+            label_source,
+            draft_id,
+            analyzed_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzed', ?, ?, ?, 'user', ?, ?, ?, ?)
+        ON CONFLICT(mail_key) DO UPDATE SET
+            importance=excluded.importance,
+            needs_reply=excluded.needs_reply,
+            summary_zh=excluded.summary_zh,
+            action_items_json=excluded.action_items_json,
+            confidence=excluded.confidence,
+            priority_reason=excluded.priority_reason,
+            analysis_status='analyzed',
+            reply_status=excluded.reply_status,
+            notification_status=excluded.notification_status,
+            analysis_error=excluded.analysis_error,
+            label_source='user',
+            draft_id=COALESCE(mail_insights.draft_id, excluded.draft_id),
+            analyzed_at=excluded.analyzed_at,
+            updated_at=excluded.updated_at
+        """,
+        (
+            mail_key,
+            message.id,
+            mailbox,
+            uid_validity,
+            importance,
+            _bool_to_int(needs_reply),
+            summary_zh,
+            action_items_json,
+            confidence,
+            priority_reason,
+            reply_status,
+            notification_status,
+            analysis_error,
+            draft_id,
+            now,
+            now,
+            now,
+        ),
+    )
+
+
+def _normalized_mail_sender_key(value: str | None) -> str:
+    text = " ".join((value or "").strip().split())
+    if not text:
+        return ""
+    email = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, flags=re.I)
+    if email:
+        return email.group(0).lower()
+    text = text.replace("mailto:", "")
+    return text.lower().strip('<>"\'[]()')
+
+
+def _normalized_mail_subject_key(value: str | None) -> str:
+    text = " ".join((value or "").strip().split())
+    if not text:
+        return ""
+    while True:
+        next_text = re.sub(r"^(re|fw|fwd)\s*:\s*", "", text, flags=re.I)
+        if next_text == text:
+            break
+        text = next_text
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    return text.lower()
+
+
+def _normalized_mail_message_id_key(value: str | None) -> str:
+    text = " ".join((value or "").strip().split())
+    if not text:
+        return ""
+    text = text.strip("<>")
+    return text.lower()
 
 
 def _stored_insight(row: tuple[object, ...]) -> StoredMailInsight:
@@ -2437,6 +3231,26 @@ def _stored_insight_feedback(row: tuple[object, ...]) -> StoredMailInsightFeedba
         needs_reply_at_feedback=_int_to_bool(row[6] if isinstance(row[6], int) else None),
         created_at=str(row[7]),
         updated_at=str(row[8]),
+    )
+
+
+def _stored_user_label_rule(row: tuple[object, ...]) -> StoredUserLabelRule:
+    return StoredUserLabelRule(
+        id=int(row[0]),
+        enabled=bool(row[1]),
+        mailbox=str(row[2] or "INBOX"),
+        sender_pattern=str(row[3] or ""),
+        subject_keyword=str(row[4] or ""),
+        importance=str(row[5] or "general"),
+        needs_reply=bool(row[6]),
+        privacy_level=str(row[7] or "normal"),
+        source_uid=str(row[8] or ""),
+        source_subject=str(row[9] or ""),
+        source_sender=str(row[10] or ""),
+        match_count=int(row[11] or 0),
+        last_matched_at=row[12] if isinstance(row[12], str) else None,
+        created_at=str(row[13]),
+        updated_at=str(row[14]),
     )
 
 

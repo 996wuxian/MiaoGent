@@ -173,6 +173,24 @@ function storedPrivacyLevel(insight: Pick<MailInsight, 'analysis_error' | 'ai_au
   return null;
 }
 
+function senderRulePattern(sender: string | null | undefined) {
+  const value = (sender ?? '').trim();
+  const email = value.match(/[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})/i);
+  if (email?.[1]) return email[1].toLowerCase();
+  return value;
+}
+
+function subjectRuleKeyword(subject: string | null | undefined) {
+  const value = (subject ?? '').replace(/\b(re|fw|fwd):/gi, '').trim();
+  return value.length > 18 ? value.slice(0, 18) : value;
+}
+
+function privacyLabel(level: string | null | undefined) {
+  if (level === 'private') return '隐私';
+  if (level === 'sensitive') return '敏感';
+  return '普通';
+}
+
 function isDevtoolsShortcut(event: KeyboardEvent) {
   const key = event.key.toLowerCase();
   const modifier = event.ctrlKey || event.metaKey;
@@ -1137,10 +1155,66 @@ function App() {
       try {
         const updated = await api.updateInsightLabels(target.uid, importance, needsReply, privacyLevel);
         updateInsightEverywhere(updated);
-        announce('success', '邮件标记已更新。');
+        announce('success', '邮件标记已更新。', {
+          durationMs: 4000,
+          actionLabel: '保存规则',
+          onAction: () => void saveLabelRuleFromInsight(updated),
+        });
         await refreshSearchIfInitialized();
       } catch (error) {
         announce('error', `标记更新失败：${errorMessage(error)}`);
+      }
+    });
+  }
+
+  async function saveLabelRuleFromInsight(insight: MailInsight) {
+    const senderPattern = senderRulePattern(insight.sender);
+    const subjectKeyword = subjectRuleKeyword(insight.subject);
+    if (!senderPattern && !subjectKeyword) {
+      announce('error', '规则至少需要发件人或主题关键词。');
+      return;
+    }
+    const level = storedPrivacyLevel(insight) ?? getMailPrivacyLevel({
+      subject: insight.subject,
+      sender: insight.sender,
+      analysis_error: insight.analysis_error,
+      summary_zh: insight.summary_zh,
+      priority_reason: insight.priority_reason,
+    });
+    const confirmed = await askConfirm({
+      title: '保存为本地纠错规则',
+      message: '后续匹配发件人和主题关键词的邮件会优先应用当前标记，不会调用 AI。',
+      confirmLabel: '保存规则',
+      tone: 'warning',
+      details: (
+        <ConfirmDetail
+          rows={[
+            ['发件人规则', senderPattern || '不限制'],
+            ['主题关键词', subjectKeyword || '不限制'],
+            ['重要性', importanceLabel[insight.importance] ?? insight.importance],
+            ['回复状态', insight.needs_reply ? '待回复' : '不需回复'],
+            ['隐私标记', privacyLabel(level)],
+          ]}
+        />
+      ),
+    });
+    if (!confirmed) return;
+    await runExclusive(`label-rule-create:${normalizeUid(insight.uid)}`, async () => {
+      try {
+        await api.createLabelRule({
+          uid: insight.uid,
+          mailbox: insight.mailbox,
+          sender_pattern: senderPattern,
+          subject_keyword: subjectKeyword,
+          importance: insight.importance,
+          needs_reply: insight.needs_reply,
+          privacy_level: level,
+          source_subject: insight.subject ?? '',
+          source_sender: insight.sender ?? '',
+        });
+        announce('success', '本地纠错规则已保存。');
+      } catch (error) {
+        announce('error', `规则保存失败：${errorMessage(error)}`);
       }
     });
   }
@@ -1973,7 +2047,7 @@ function MailListCard({
       <button className="mail-card-main" onClick={onOpen} aria-current={selected ? 'true' : undefined}>
         <div className="mail-card-top">
           <span className="mail-sender">{item.sender || '未知发件人'}</span>
-          {item.isSeen !== null && <Badge tone={item.isSeen ? 'neutral' : 'warning'}>{item.isSeen ? '已读' : '未读'}</Badge>}
+          {item.isSeen === false && <span className="mail-unread-dot" role="img" aria-label="未读邮件" title="未读邮件" />}
         </div>
         <div className="mail-subject">{item.subject || '(无主题)'}</div>
         {item.summary && <div className="mail-summary">{item.summary}</div>}

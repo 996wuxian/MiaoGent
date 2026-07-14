@@ -46,14 +46,14 @@ class FakeLLM:
         return json.dumps(self.response, ensure_ascii=False)
 
 
-def _message(uid: int, *, subject: str = "Subject", body: str = "Body") -> MailMessage:
+def _message(uid: int, *, subject: str = "Subject", body: str = "Body", is_seen: bool = True) -> MailMessage:
     return MailMessage(
         id=f"uid:{uid}",
         sender="sender@example.com",
         recipient="you@qq.com",
         subject=subject,
         body=body,
-        is_seen=True,
+        is_seen=is_seen,
         message_id=f"<message-{uid}@example.com>",
     )
 
@@ -709,7 +709,7 @@ class FakeInsightAgent:
 
 
 def test_startup_sync_title_classifies_reply_mail_emits_only_important_and_is_idempotent(tmp_path):
-    messages = (_message(1), _message(2), _message(3))
+    messages = (_message(1, is_seen=False), _message(2, is_seen=False), _message(3, is_seen=False))
     client = FakeIncrementalClient(
         [
             IncrementalMailBatch(uid_validity=99, messages=messages, has_more=False),
@@ -751,6 +751,124 @@ def test_startup_sync_title_classifies_reply_mail_emits_only_important_and_is_id
     startup_events = [event for event in events.events if event.name == "startup_summary"]
     assert len(startup_events) == 1
     assert startup_events[0].payload["draft_ready_count"] == 0
+
+
+def test_startup_sync_applies_user_label_rule_before_notification(tmp_path):
+    message = _message(11, subject="Offer Letter")
+    client = FakeIncrementalClient([
+        IncrementalMailBatch(uid_validity=99, messages=(message,), has_more=False),
+    ])
+    agent = FakeInsightAgent({"uid:11": _result(11, importance=MailImportance.GENERAL)})
+    store = StateStore(tmp_path / "state.sqlite3")
+    store.create_user_label_rule(
+        mailbox="INBOX",
+        sender_pattern="example.com",
+        subject_keyword="Offer",
+        importance="urgent",
+        needs_reply=True,
+        privacy_level="sensitive",
+        source_uid="uid:seed",
+    )
+    events = RecordingEventSink()
+    service = MailSyncService(client, agent, store, event_sink=events)  # type: ignore[arg-type]
+
+    summary = service.sync_startup()
+
+    assert summary.urgent_count == 1
+    assert summary.reply_count == 1
+    insight = store.get_mail_insight("uid:11", uid_validity=99)
+    assert insight is not None
+    assert insight.importance == "urgent"
+    assert insight.needs_reply is True
+    assert insight.analysis_error == "privacy_sensitive"
+    assert "命中本地用户规则" in insight.priority_reason
+    assert store.list_user_label_rules()[0].match_count == 1
+
+
+def test_sync_refresh_preserves_manual_label_over_ai_reclassification(tmp_path):
+    original = MailMessage(
+        id="uid:50",
+        sender="招聘组 <hr@example.com>",
+        recipient="you@qq.com",
+        subject="录用通知",
+        body="请确认入职安排。",
+        is_seen=False,
+        message_id="<message-50@example.com>",
+    )
+    refreshed = MailMessage(
+        id="uid:50",
+        sender="noreply@other.example.com",
+        recipient="you@qq.com",
+        subject="系统邮件同步标题",
+        body="请确认入职安排。",
+        is_seen=False,
+        message_id="<message-50@example.com>",
+    )
+    client = FakeIncrementalClient(
+        [
+            IncrementalMailBatch(uid_validity=7, messages=(original,), has_more=False),
+            IncrementalMailBatch(uid_validity=8, messages=(refreshed,), has_more=False),
+        ]
+    )
+    agent = FakeInsightAgent({"uid:50": _result(50, importance=MailImportance.GENERAL)})
+    store = StateStore(tmp_path / "state.sqlite3")
+    service = MailSyncService(client, agent, store)  # type: ignore[arg-type]
+
+    service.sync_startup()
+    store.update_mail_insight_labels("uid:50", importance="important", needs_reply=True, privacy_level="sensitive")
+    store.reset_mail_recognition_cache()
+
+    summary = service.sync(trigger="manual")
+
+    assert summary.processed_count == 1
+    assert agent.triaged == []
+    insight = store.get_mail_insight("uid:50", uid_validity=8)
+    assert insight is not None
+    assert insight.importance == "important"
+    assert insight.needs_reply is True
+    assert insight.analysis_error == "privacy_sensitive"
+    assert "用户手动标记" in insight.priority_reason
+
+
+def test_sync_does_not_apply_manual_label_when_message_id_changes(tmp_path):
+    original = MailMessage(
+        id="uid:51",
+        sender="招聘组 <hr@example.com>",
+        recipient="you@qq.com",
+        subject="录用通知",
+        body="请确认入职安排。",
+        is_seen=False,
+        message_id="<message-51@example.com>",
+    )
+    reused_uid = MailMessage(
+        id="uid:51",
+        sender="other@example.com",
+        recipient="you@qq.com",
+        subject="完全不同的新邮件",
+        body="普通通知。",
+        is_seen=False,
+        message_id="<different-51@example.com>",
+    )
+    client = FakeIncrementalClient(
+        [
+            IncrementalMailBatch(uid_validity=7, messages=(original,), has_more=False),
+            IncrementalMailBatch(uid_validity=8, messages=(reused_uid,), has_more=False),
+        ]
+    )
+    agent = FakeInsightAgent({"uid:51": _result(51, importance=MailImportance.GENERAL)})
+    store = StateStore(tmp_path / "state.sqlite3")
+    service = MailSyncService(client, agent, store)  # type: ignore[arg-type]
+
+    service.sync_startup()
+    store.update_mail_insight_labels("uid:51", importance="important", needs_reply=True, privacy_level="sensitive")
+    store.reset_mail_recognition_cache()
+    service.sync(trigger="manual")
+
+    insight = store.get_mail_insight("uid:51", uid_validity=8)
+    assert insight is not None
+    assert insight.importance == "general"
+    assert insight.needs_reply is False
+    assert "用户手动标记" not in insight.priority_reason
 
 
 def test_startup_sync_marks_sensitive_title_without_ai_or_body_summary(tmp_path):
@@ -813,7 +931,7 @@ def test_startup_sync_reclassifies_existing_sensitive_insight_without_ai(tmp_pat
 
 
 def test_unacknowledged_important_event_replays_on_restart_and_ack_is_monotonic(tmp_path):
-    message = _message(30)
+    message = _message(30, is_seen=False)
     store = StateStore(tmp_path / "state.sqlite3")
     first_events = RecordingEventSink()
     first = MailSyncService(
@@ -851,12 +969,72 @@ def test_unacknowledged_important_event_replays_on_restart_and_ack_is_monotonic(
     assert acknowledged is not None and acknowledged.notification_status == "notified"
 
 
+def test_seen_important_mail_is_not_enqueued_for_desktop_notification(tmp_path):
+    message = _message(33, is_seen=True)
+    store = StateStore(tmp_path / "state.sqlite3")
+    events = RecordingEventSink()
+    service = MailSyncService(
+        FakeIncrementalClient(
+            [IncrementalMailBatch(uid_validity=7, messages=(message,), has_more=False)]
+        ),
+        FakeInsightAgent({"uid:33": _result(33, importance=MailImportance.IMPORTANT)}),
+        store,
+        event_sink=events,
+    )
+
+    service.sync_startup()
+
+    assert [event for event in events.events if event.name == "important_mail"] == []
+    assert store.list_notification_outbox(uid_validity=7, mailbox="INBOX") == []
+
+
+def test_manual_label_on_locally_seen_mail_does_not_reopen_notification_outbox(tmp_path):
+    message = _message(34, is_seen=False)
+    store = StateStore(tmp_path / "state.sqlite3")
+    service = MailSyncService(
+        FakeIncrementalClient(
+            [
+                IncrementalMailBatch(uid_validity=7, messages=(message,), has_more=False),
+                IncrementalMailBatch(uid_validity=7, messages=(), has_more=False),
+            ]
+        ),
+        FakeInsightAgent({"uid:34": _result(34, importance=MailImportance.GENERAL)}),
+        store,
+    )
+
+    service.sync_startup()
+    assert store.mark_mail_seen("uid:34") is True
+    updated = store.update_mail_insight_labels(
+        "uid:34",
+        importance="important",
+        needs_reply=True,
+        privacy_level="sensitive",
+    )
+
+    assert updated is not None
+    assert updated.is_seen is True
+    assert updated.importance == "important"
+    assert updated.needs_reply is True
+    assert store.list_notification_outbox(uid_validity=7, mailbox="INBOX") == []
+
+    restart_events = RecordingEventSink()
+    restarted = MailSyncService(
+        FakeIncrementalClient([IncrementalMailBatch(uid_validity=7, messages=(), has_more=False)]),
+        FakeInsightAgent({}),
+        store,
+        event_sink=restart_events,
+    )
+    restarted.sync_startup()
+
+    assert [event for event in restart_events.events if event.name == "important_mail"] == []
+
+
 def test_host_reported_notification_failure_retries_in_same_sidecar(tmp_path):
     store = StateStore(tmp_path / "state.sqlite3")
     events = RecordingEventSink()
     service = MailSyncService(
         FakeIncrementalClient(
-            [IncrementalMailBatch(uid_validity=7, messages=(_message(32),), has_more=False)]
+            [IncrementalMailBatch(uid_validity=7, messages=(_message(32, is_seen=False),), has_more=False)]
         ),
         FakeInsightAgent({"uid:32": _result(32, importance=MailImportance.IMPORTANT)}),
         store,

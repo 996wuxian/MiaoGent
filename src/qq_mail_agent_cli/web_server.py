@@ -48,7 +48,7 @@ from qq_mail_agent_cli.services import (
     SecretaryInspectionService,
     SyncAlreadyRunningError,
 )
-from qq_mail_agent_cli.storage import StateStore
+from qq_mail_agent_cli.storage import StateStore, analysis_error_from_privacy_level, apply_user_label_rule
 from qq_mail_agent_cli.web_schemas import (
     ActionLogResponse,
     ConfirmRequest,
@@ -76,6 +76,8 @@ from qq_mail_agent_cli.web_schemas import (
     TriageRecentRequest,
     TriageRecentResponse,
     TriageResponse,
+    UserLabelRuleCreateRequest,
+    UserLabelRuleResponse,
     action_to_response,
     draft_to_response,
     fetch_failure_to_response,
@@ -88,6 +90,7 @@ from qq_mail_agent_cli.web_schemas import (
     send_result_to_response,
     translation_to_response,
     triage_to_response,
+    user_label_rule_to_response,
     startup_summary_to_response,
     sync_state_to_response,
 )
@@ -235,6 +238,7 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(error)) from error
         if not marked:
             raise HTTPException(status_code=404, detail="邮件不存在或 UID 无效")
+        store.mark_mail_seen(uid)
         # Preserve the legacy PC queue workflow. Desktop automation uses the
         # independent insight/reply/notification states instead.
         store.set_triage_queue_status(_normalize_uid_for_store(uid), "done")
@@ -297,6 +301,17 @@ def create_app(
         model_name = app.state.deepseek_config_factory().model
         privacy_config = app.state.privacy_config_factory()
         for message in messages:
+            rule = store.match_user_label_rule(message)
+            if rule is not None:
+                result = apply_user_label_rule(MailAgent().classify_title(message), rule)
+                store.save_triage(
+                    message,
+                    result,
+                    model="user-label-rule",
+                    analysis_error=analysis_error_from_privacy_level(rule.privacy_level),
+                )
+                processed.append(triage_to_response(result, message=message))
+                continue
             if _record_privacy_review_if_blocked(store, message, privacy_config):
                 continue
             result = agent.triage(message)
@@ -431,6 +446,37 @@ def create_app(
         if feedback is None:
             raise HTTPException(status_code=404, detail="本地邮件洞察不存在")
         return insight_feedback_to_response(feedback)
+
+    @app.get("/api/rules/label", response_model=list[UserLabelRuleResponse])
+    def list_user_label_rules(store: Annotated[StateStore, Depends(_get_state_store)]):
+        return [user_label_rule_to_response(rule) for rule in store.list_user_label_rules()]
+
+    @app.post("/api/rules/label", response_model=UserLabelRuleResponse)
+    def create_user_label_rule(
+        request: UserLabelRuleCreateRequest,
+        store: Annotated[StateStore, Depends(_get_state_store)],
+    ):
+        try:
+            rule = store.create_user_label_rule(
+                mailbox=request.mailbox,
+                sender_pattern=request.sender_pattern,
+                subject_keyword=request.subject_keyword,
+                importance=request.importance,
+                needs_reply=request.needs_reply,
+                privacy_level=request.privacy_level,
+                source_uid=request.uid,
+                source_subject=request.source_subject,
+                source_sender=request.source_sender,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return user_label_rule_to_response(rule)
+
+    @app.delete("/api/rules/label/{rule_id}", response_model=StatusResponse)
+    def delete_user_label_rule(rule_id: int, store: Annotated[StateStore, Depends(_get_state_store)]):
+        if not store.delete_user_label_rule(rule_id):
+            raise HTTPException(status_code=404, detail="本地纠错规则不存在")
+        return StatusResponse(ok=True, detail="本地纠错规则已删除")
 
     @app.post("/api/insights/{uid}/notification-status", response_model=StatusResponse)
     def set_notification_status(

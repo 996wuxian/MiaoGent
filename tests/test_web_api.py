@@ -140,6 +140,18 @@ def test_web_recent_messages_store_metadata(tmp_path):
     assert store.search_mail_items(keyword="Interview")[0].uid == "uid:101"
 
 
+def test_web_mark_seen_updates_local_seen_cache(tmp_path):
+    client, fake_client, store = _client(tmp_path)
+    client.get("/api/messages/recent?limit=2")
+    assert store.search_mail_items(keyword="Interview")[0].is_seen is False
+
+    response = client.post("/api/messages/101/mark-seen", json={"confirmed": True})
+
+    assert response.status_code == 200
+    assert fake_client.marked_seen == ["101"]
+    assert store.search_mail_items(keyword="Interview")[0].is_seen is True
+
+
 def test_web_recent_messages_returns_json_error_on_mail_failure(tmp_path):
     class FailingMailClient(FakeMailClient):
         def list_real_recent(self, limit: int, *, offset: int = 0):
@@ -413,6 +425,13 @@ def test_web_can_update_mail_insight_labels(tmp_path):
     assert insight.importance == "urgent"
     assert insight.needs_reply is True
     assert insight.analysis_error == "privacy_private"
+    triage = store.get_triage_result("uid:110")
+    assert triage is not None
+    assert triage.classification == "respond"
+    assert triage.suggested_action == "draft_reply"
+    assert triage.queue_status == "pending"
+    assert "用户手动标记" in triage.reason
+    assert store.search_mail_items(keyword="招聘")[0].classification == "respond"
 
     clear_response = client.patch(
         "/api/insights/110/labels",
@@ -426,6 +445,154 @@ def test_web_can_update_mail_insight_labels(tmp_path):
     assert clear_payload["reply_status"] == "not_needed"
     assert clear_payload["analysis_error"] == "privacy_normal"
     assert clear_payload["ai_audit"]["privacy_level"] == "normal"
+    clear_triage = store.get_triage_result("uid:110")
+    assert clear_triage is not None
+    assert clear_triage.classification == "ignore"
+    assert clear_triage.suggested_action == "no_action"
+    assert clear_triage.queue_status == "done"
+
+
+def test_web_manual_label_survives_refresh_reset_and_ai_retriage(tmp_path):
+    message = MailMessage(
+        id="uid:111",
+        sender='招聘组 <hr@example.com>',
+        recipient="me@qq.com",
+        subject="录用通知",
+        body="请确认入职安排。",
+    )
+    client, _, store = _client(tmp_path)
+    store.save_triage(
+        message,
+        TriageResult(
+            mail_id=message.id,
+            classification=MailClassification.IGNORE,
+            reason="Initial low priority.",
+            suggested_action=SuggestedAction.NO_ACTION,
+            action_reason="No action initially.",
+            importance=MailImportance.GENERAL,
+            needs_reply=False,
+        ),
+        model="test",
+    )
+
+    response = client.patch(
+        "/api/insights/111/labels",
+        json={"importance": "important", "needs_reply": True, "privacy_level": "sensitive"},
+    )
+    assert response.status_code == 200
+
+    reset_response = client.post("/api/desktop/reset-recognition-cache")
+    assert reset_response.status_code == 200
+    assert reset_response.json()["mail_insights"] == 0
+    assert reset_response.json()["triage_results"] == 0
+    preserved = store.get_mail_insight("uid:111")
+    assert preserved is not None
+    assert preserved.importance == "important"
+    assert preserved.needs_reply is True
+    assert preserved.analysis_error == "privacy_sensitive"
+    preserved_triage = store.get_triage_result("uid:111")
+    assert preserved_triage is not None
+    assert preserved_triage.classification == "respond"
+
+    refreshed_message = MailMessage(
+        id="uid:111",
+        sender="hr@example.com",
+        recipient="me@qq.com",
+        subject="Re: 录用通知",
+        body="请确认入职安排。",
+    )
+    store.save_triage(
+        refreshed_message,
+        TriageResult(
+            mail_id=refreshed_message.id,
+            classification=MailClassification.IGNORE,
+            reason="AI tried to downgrade it.",
+            suggested_action=SuggestedAction.NO_ACTION,
+            action_reason="No action from AI.",
+            importance=MailImportance.GENERAL,
+            needs_reply=False,
+        ),
+        model="ai-test",
+        uid_validity=999,
+    )
+
+    after_retriage = store.get_mail_insight("uid:111", uid_validity=999)
+    assert after_retriage is not None
+    assert after_retriage.importance == "important"
+    assert after_retriage.needs_reply is True
+    assert store.get_triage_result("uid:111").classification == "respond"  # type: ignore[union-attr]
+    assert store.list_mail_insights(limit=5, include_stale=True)[0].importance == "important"
+
+
+def test_web_can_create_list_delete_user_label_rule(tmp_path):
+    client, _, _ = _client(tmp_path)
+
+    created = client.post(
+        "/api/rules/label",
+        json={
+            "uid": "uid:rule",
+            "mailbox": "INBOX",
+            "sender_pattern": "example.com",
+            "subject_keyword": "Offer",
+            "importance": "important",
+            "needs_reply": True,
+            "privacy_level": "sensitive",
+            "source_subject": "Offer Letter",
+            "source_sender": "hr@example.com",
+        },
+    )
+
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload["id"] > 0
+    assert payload["sender_pattern"] == "example.com"
+    assert payload["privacy_level"] == "sensitive"
+
+    rules = client.get("/api/rules/label")
+    assert rules.status_code == 200
+    assert [item["id"] for item in rules.json()] == [payload["id"]]
+
+    deleted = client.delete(f"/api/rules/label/{payload['id']}")
+    assert deleted.status_code == 200
+    assert client.get("/api/rules/label").json() == []
+
+
+def test_web_triage_recent_applies_user_label_rule_without_ai(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages = [
+        MailMessage(
+            id="uid:888",
+            sender="hr@example.com",
+            recipient="me@qq.com",
+            subject="Offer Letter",
+            body="请查看附件中的入职录用通知书。",
+            snippet="入职录用通知书",
+            is_seen=False,
+        )
+    ]
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+    store.create_user_label_rule(
+        mailbox="INBOX",
+        sender_pattern="example.com",
+        subject_keyword="Offer",
+        importance="urgent",
+        needs_reply=True,
+        privacy_level="private",
+        source_uid="uid:seed",
+    )
+
+    response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["processed"][0]["importance"] == "urgent"
+    assert payload["processed"][0]["needs_reply"] is True
+    assert agent.triage_calls == []
+    insight = store.get_mail_insight("uid:888")
+    assert insight is not None
+    assert insight.analysis_error == "privacy_private"
+    assert "命中本地用户规则" in insight.priority_reason
 
 
 def test_web_can_save_latest_mail_insight_feedback(tmp_path):

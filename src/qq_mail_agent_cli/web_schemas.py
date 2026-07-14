@@ -15,6 +15,7 @@ from qq_mail_agent_cli.storage import (
     StoredMailSearchResult,
     StoredStartupSummary,
     StoredTriage,
+    StoredUserLabelRule,
 )
 
 
@@ -55,6 +56,18 @@ class InsightLabelsRequest(BaseModel):
 class InsightFeedbackRequest(BaseModel):
     feedback: str
     comment: str = ""
+
+
+class UserLabelRuleCreateRequest(BaseModel):
+    uid: str = ""
+    mailbox: str = "INBOX"
+    sender_pattern: str = ""
+    subject_keyword: str = ""
+    importance: str
+    needs_reply: bool
+    privacy_level: str = "normal"
+    source_subject: str = ""
+    source_sender: str = ""
 
 
 class DesktopNotificationStatusRequest(BaseModel):
@@ -268,6 +281,24 @@ class InsightFeedbackResponse(BaseModel):
     comment: str = ""
     importance_at_feedback: str | None = None
     needs_reply_at_feedback: bool | None = None
+    created_at: str
+    updated_at: str
+
+
+class UserLabelRuleResponse(BaseModel):
+    id: int
+    enabled: bool
+    mailbox: str
+    sender_pattern: str
+    subject_keyword: str
+    importance: str
+    needs_reply: bool
+    privacy_level: str
+    source_uid: str
+    source_subject: str
+    source_sender: str
+    match_count: int
+    last_matched_at: str | None = None
     created_at: str
     updated_at: str
 
@@ -662,6 +693,10 @@ def insight_feedback_to_response(feedback: StoredMailInsightFeedback) -> Insight
         created_at=feedback.created_at,
         updated_at=feedback.updated_at,
     )
+
+
+def user_label_rule_to_response(rule: StoredUserLabelRule) -> UserLabelRuleResponse:
+    return UserLabelRuleResponse(**vars(rule))
 
 
 def sync_state_to_response(state: MailboxSyncState) -> SyncStateResponse:

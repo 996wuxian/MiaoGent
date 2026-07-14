@@ -17,6 +17,7 @@ import type {
   Translation,
   TriageItem,
   TriageRecentResult,
+  UserLabelRule,
 } from './types';
 
 type RequestOptions = RequestInit & { signal?: AbortSignal };
@@ -170,6 +171,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ feedback, comment }),
     }),
+  labelRules: (signal?: AbortSignal) => request<UserLabelRule[]>('/api/rules/label', { signal }),
+  createLabelRule: (rule: {
+    uid: string;
+    mailbox: string;
+    sender_pattern: string;
+    subject_keyword: string;
+    importance: string;
+    needs_reply: boolean;
+    privacy_level: string;
+    source_subject: string;
+    source_sender: string;
+  }) =>
+    request<UserLabelRule>('/api/rules/label', {
+      method: 'POST',
+      body: JSON.stringify(rule),
+    }),
+  deleteLabelRule: (ruleId: number) =>
+    request<{ ok: boolean; detail: string }>(`/api/rules/label/${ruleId}`, { method: 'DELETE' }),
   setInsightNotificationStatus: (uid: string, status: string) =>
     request<{ ok: boolean; detail: string }>(`/api/insights/${encodeURIComponent(uid)}/notification-status`, {
       method: 'POST',
