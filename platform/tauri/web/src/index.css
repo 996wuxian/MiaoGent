@@ -305,13 +305,17 @@ select:focus-visible,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 18px 10px;
+  margin: 8px 18px 0;
   border: 1px solid rgb(22 119 255 / 0.22);
   border-radius: 16px;
   padding: 12px 14px;
   color: var(--color-text-secondary);
   background: rgb(22 119 255 / 0.08);
   box-shadow: var(--shadow-sm);
+}
+
+.onboarding-banner + .workbench-grid {
+  padding-top: 6px;
 }
 
 .onboarding-banner > div {
