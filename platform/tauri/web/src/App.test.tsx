@@ -585,6 +585,26 @@ describe('MiaoGent workbench', () => {
     expect(screen.getByRole('button', { name: '刷新工作台' })).toBeInTheDocument();
   });
 
+  it('桌面后端尚未连接时点击刷新只提示启动中且不白屏', async () => {
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    tauriMocks.invoke.mockReset();
+    tauriMocks.listen.mockReset().mockResolvedValue(vi.fn());
+    tauriMocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'backend_connection') return null;
+      if (command === 'desktop_config') return desktopConfig();
+      return null;
+    });
+    const fetchMock = installFetch();
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: '刷新工作台' }));
+
+    expect(await screen.findByText('后台 Agent 正在启动，请稍后再刷新。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MiaoGent' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/desktop/reset-recognition-cache' && init?.method === 'POST')).toBe(false);
+  });
+
   it('桌面配置未完成时收到启动汇总事件也不直接弹窗', async () => {
     vi.stubGlobal('__TAURI_INTERNALS__', {});
     const listeners: Record<string, (event: { payload: unknown }) => void> = {};
@@ -1466,6 +1486,25 @@ describe('MiaoGent workbench', () => {
     await user.click(trigger);
     const listbox = await screen.findByRole('listbox', { name: '草稿' });
     expect(within(listbox).getByRole('option', { name: /回复 B/ })).toBeInTheDocument();
+  });
+
+  it('草稿接口返回非数组时显示错误且不触发白屏', async () => {
+    installFetch({
+      recent: [message('A', 'A 主题', true)],
+      handler: (url) => {
+        if (url.startsWith('/api/drafts?')) return jsonResponse({ detail: 'draft payload is not a list' });
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole('tab', { name: /草稿/ });
+    await user.click(screen.getByRole('tab', { name: /草稿/ }));
+
+    expect(await screen.findByText('draft payload is not a list')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MiaoGent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^草稿：/ })).toBeDisabled();
   });
 
   it('重复点击发送只会创建一个保存/发送流程', async () => {

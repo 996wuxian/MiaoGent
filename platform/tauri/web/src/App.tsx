@@ -1418,6 +1418,10 @@ function App() {
       announce('error', '草稿正在发送，请等待结果后再刷新。');
       return;
     }
+    if (desktopRuntime && !desktopConnected) {
+      announce('error', '后台 Agent 正在启动，请稍后再刷新。');
+      return;
+    }
     if (!(await guardDraftChanges('刷新工作台'))) return;
     announce('loading', '正在清除本地识别缓存并重新同步…');
     try {

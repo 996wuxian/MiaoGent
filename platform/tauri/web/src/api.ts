@@ -48,6 +48,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   try {
     payload = text ? JSON.parse(text) : null;
   } catch {
+    if (response.ok) {
+      const contentType = response.headers.get('content-type') || 'unknown content type';
+      throw new Error(`Invalid JSON response from ${path}: ${contentType}`);
+    }
     payload = { detail: text || `HTTP ${response.status}` };
   }
   if (!response.ok) {
@@ -55,6 +59,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
   }
   return payload as T;
+}
+
+async function requestList<T>(path: string, options: RequestOptions = {}): Promise<T[]> {
+  const payload = await request<unknown>(path, options);
+  if (Array.isArray(payload)) return payload as T[];
+  const detail = typeof payload === 'object' && payload && 'detail' in payload ? payload.detail : null;
+  throw new Error(typeof detail === 'string' ? detail : `Expected array response from ${path}`);
 }
 
 function withParams(path: string, values: Record<string, string | number | boolean | null | undefined>) {
@@ -67,14 +78,14 @@ function withParams(path: string, values: Record<string, string | number | boole
 }
 
 export const api = {
-  localHealth: (signal?: AbortSignal) => request<HealthItem[]>('/api/health/local', { signal }),
+  localHealth: (signal?: AbortSignal) => requestList<HealthItem>('/api/health/local', { signal }),
   externalHealth: (target: 'imap' | 'smtp' | 'deepseek') =>
     request<HealthItem>(`/api/health/${target}`, {
       method: 'POST',
       body: JSON.stringify({ confirmed: true }),
     }),
   recentMessages: (limit: number, offset: number, signal?: AbortSignal) =>
-    request<MailMessage[]>(withParams('/api/messages/recent', { limit, offset }), { signal }),
+    requestList<MailMessage>(withParams('/api/messages/recent', { limit, offset }), { signal }),
   messageDetail: (uid: string, signal?: AbortSignal) =>
     request<MailMessage>(`/api/messages/${encodeURIComponent(uid)}`, { signal }),
   searchMessages: (
@@ -86,7 +97,7 @@ export const api = {
       limit?: number;
     },
     signal?: AbortSignal,
-  ) => request<SearchMailItem[]>(withParams('/api/search/messages', { limit: filters.limit ?? 100, ...filters }), { signal }),
+  ) => requestList<SearchMailItem>(withParams('/api/search/messages', { limit: filters.limit ?? 100, ...filters }), { signal }),
   triageRecent: (limit: number, offset: number) =>
     request<TriageRecentResult>('/api/triage/recent', {
       method: 'POST',
@@ -100,7 +111,7 @@ export const api = {
   triageQueue: (statuses: QueueStatus[] = ['pending', 'later'], signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: '100' });
     statuses.forEach((status) => params.append('statuses', status));
-    return request<TriageItem[]>(`/api/triage/queue?${params.toString()}`, { signal });
+    return requestList<TriageItem>(`/api/triage/queue?${params.toString()}`, { signal });
   },
   setQueueStatus: (uid: string, status: QueueStatus) =>
     request<{ ok: boolean; detail: string }>(`/api/triage/${encodeURIComponent(uid)}/status`, {
@@ -134,7 +145,7 @@ export const api = {
       body: JSON.stringify({ confirmed: true }),
     }),
   drafts: (status: DraftFilter = 'pending', signal?: AbortSignal) =>
-    request<Draft[]>(withParams('/api/drafts', { status, limit: 100 }), { signal }),
+    requestList<Draft>(withParams('/api/drafts', { status, limit: 100 }), { signal }),
   updateDraft: (draftId: string, subject: string, body: string) =>
     request<Draft>(`/api/drafts/${encodeURIComponent(draftId)}`, {
       method: 'PATCH',
@@ -145,7 +156,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirmed: true }),
     }),
-  actions: (signal?: AbortSignal) => request<ActionLog[]>('/api/actions?limit=50', { signal }),
+  actions: (signal?: AbortSignal) => requestList<ActionLog>('/api/actions?limit=50', { signal }),
   insights: (
     filters: {
       importance?: string;
@@ -158,7 +169,7 @@ export const api = {
       limit?: number;
     } = {},
     signal?: AbortSignal,
-  ) => request<MailInsight[]>(withParams('/api/insights', { limit: filters.limit ?? 100, ...filters }), { signal }),
+  ) => requestList<MailInsight>(withParams('/api/insights', { limit: filters.limit ?? 100, ...filters }), { signal }),
   insight: (uid: string, signal?: AbortSignal) =>
     request<MailInsight>(`/api/insights/${encodeURIComponent(uid)}`, { signal }),
   updateInsightLabels: (uid: string, importance: string, needsReply: boolean, privacyLevel: string) =>
@@ -171,7 +182,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ feedback, comment }),
     }),
-  labelRules: (signal?: AbortSignal) => request<UserLabelRule[]>('/api/rules/label', { signal }),
+  labelRules: (signal?: AbortSignal) => requestList<UserLabelRule>('/api/rules/label', { signal }),
   createLabelRule: (rule: {
     uid: string;
     mailbox: string;
@@ -197,7 +208,7 @@ export const api = {
   latestStartupSummary: (signal?: AbortSignal) =>
     request<StartupSummary>('/api/desktop/startup-summary/latest', { signal }),
   fetchFailures: (signal?: AbortSignal) =>
-    request<FetchFailure[]>('/api/desktop/fetch-failures?limit=100', { signal }),
+    requestList<FetchFailure>('/api/desktop/fetch-failures?limit=100', { signal }),
   resetRecognitionCache: () =>
     request<RecognitionCacheResetReport>('/api/desktop/reset-recognition-cache', { method: 'POST' }),
   desktopSync: () => request<StartupSummary>('/api/desktop/sync', { method: 'POST' }),
