@@ -227,6 +227,9 @@ def test_web_generates_summary_on_demand_for_normal_mail(tmp_path):
     stored = store.get_mail_insight("uid:101")
     assert stored is not None
     assert stored.summary_zh == "Interview question 按需摘要"
+    assert store.get_triage_result("uid:101") is None
+    assert client.get("/api/triage/queue?statuses=pending").json() == []
+    assert client.get("/api/search/messages?queue_status=pending").json() == []
 
 
 def test_web_summary_requires_confirmation_for_sensitive_title(tmp_path):
@@ -281,6 +284,35 @@ def test_web_summary_allows_sensitive_title_after_confirmation(tmp_path):
     stored = store.get_mail_insight("uid:101")
     assert stored is not None
     assert stored.analysis_error == "privacy_sensitive"
+    assert store.get_triage_result("uid:101") is None
+
+
+def test_web_summary_preserves_existing_queue_status(tmp_path):
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, agent=agent)
+    message = FakeMailClient().messages[0]
+    store.save_triage(
+        message,
+        TriageResult(
+            mail_id=message.id,
+            classification=MailClassification.RESPOND,
+            reason="Needs a reply.",
+            suggested_action=SuggestedAction.DRAFT_REPLY,
+            action_reason="Prepare a reply.",
+            importance=MailImportance.IMPORTANT,
+            needs_reply=True,
+        ),
+        model="test",
+    )
+    assert store.set_triage_queue_status("uid:101", "done")
+
+    response = client.post("/api/messages/101/summary", json={"confirmed": False})
+
+    assert response.status_code == 200
+    triage = store.get_triage_result("uid:101")
+    assert triage is not None
+    assert triage.queue_status == "done"
+    assert client.get("/api/triage/queue?statuses=pending").json() == []
 
 
 def test_web_risky_actions_require_confirmation(tmp_path):

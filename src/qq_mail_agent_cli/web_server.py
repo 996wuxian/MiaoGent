@@ -651,6 +651,7 @@ def create_app(
                 uid_validity=uid_validity,
                 mailbox=mailbox,
                 analysis_error=privacy_error_code(verdict),
+                write_triage=False,
             )
             insight = store.get_mail_insight(message.id, uid_validity=uid_validity, mailbox=mailbox)
             assert insight is not None

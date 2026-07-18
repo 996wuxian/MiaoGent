@@ -494,53 +494,59 @@ class StateStore:
         uid_validity: int,
         mailbox: str = "INBOX",
         analysis_error: str | None = None,
+        write_triage: bool = True,
     ) -> None:
         self.upsert_mail(message, uid_validity=uid_validity, mailbox=mailbox)
         now = _now()
         mail_key = _mail_key(mailbox, uid_validity, message.id)
         importance, needs_reply = _effective_insight(result)
         with self._connect() as conn:
-            if model not in {"user-label-manual", "user-label-rule"} and _has_matching_user_label_decision(conn, message, mailbox):
+            if (
+                write_triage
+                and model not in {"user-label-manual", "user-label-rule"}
+                and _has_matching_user_label_decision(conn, message, mailbox)
+            ):
                 _copy_matching_user_label_decision(conn, message, mailbox=mailbox, uid_validity=uid_validity, now=now)
                 return
-            conn.execute(
-                """
-                INSERT INTO triage_results(
-                    uid,
-                    classification,
-                    reason,
-                    suggested_action,
-                    action_reason,
-                    mailbox,
-                    source_uidvalidity,
-                    model,
-                    created_at,
-                    updated_at
+            if write_triage:
+                conn.execute(
+                    """
+                    INSERT INTO triage_results(
+                        uid,
+                        classification,
+                        reason,
+                        suggested_action,
+                        action_reason,
+                        mailbox,
+                        source_uidvalidity,
+                        model,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(uid) DO UPDATE SET
+                        classification=excluded.classification,
+                        reason=excluded.reason,
+                        suggested_action=excluded.suggested_action,
+                        action_reason=excluded.action_reason,
+                        mailbox=excluded.mailbox,
+                        source_uidvalidity=excluded.source_uidvalidity,
+                        model=excluded.model,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        message.id,
+                        result.classification.value,
+                        result.reason,
+                        result.suggested_action.value,
+                        result.action_reason,
+                        mailbox,
+                        uid_validity,
+                        model,
+                        now,
+                        now,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(uid) DO UPDATE SET
-                    classification=excluded.classification,
-                    reason=excluded.reason,
-                    suggested_action=excluded.suggested_action,
-                    action_reason=excluded.action_reason,
-                    mailbox=excluded.mailbox,
-                    source_uidvalidity=excluded.source_uidvalidity,
-                    model=excluded.model,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    message.id,
-                    result.classification.value,
-                    result.reason,
-                    result.suggested_action.value,
-                    result.action_reason,
-                    mailbox,
-                    uid_validity,
-                    model,
-                    now,
-                    now,
-                ),
-            )
             previous = conn.execute(
                 """
                 SELECT reply_status, notification_status, draft_id
@@ -2312,7 +2318,7 @@ class StateStore:
             params.append(classification)
         if queue_status:
             _validate_queue_status(queue_status)
-            where.append("COALESCE(t.queue_status, 'pending') = ?")
+            where.append("t.uid IS NOT NULL AND COALESCE(t.queue_status, 'pending') = ?")
             params.append(queue_status)
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         params.append(limit)
