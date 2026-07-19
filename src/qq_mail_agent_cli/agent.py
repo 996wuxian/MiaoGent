@@ -25,6 +25,7 @@ class MailAgent:
         self._llm_client = llm_client
 
     def triage(self, message: MailMessage) -> TriageResult:
+        _require_complete_message(message)
         if self._llm_client:
             return self._triage_with_llm(message)
         return self._triage_with_rules(message)
@@ -33,16 +34,19 @@ class MailAgent:
         return self._classify_title_with_rules(message)
 
     def summarize_message(self, message: MailMessage) -> MailSummary:
+        _require_complete_message(message)
         if self._llm_client:
             return self._summarize_with_llm(message)
         return self._summarize_with_rules(message)
 
     def draft_reply(self, message: MailMessage) -> Draft:
+        _require_complete_message(message)
         if self._llm_client:
             return self._draft_with_llm(message)
         return self._draft_with_rules(message)
 
     def translate_message(self, message: MailMessage) -> MailTranslation:
+        _require_complete_message(message)
         if self._llm_client:
             return self._translate_with_llm(message)
         return self._translate_with_rules(message)
@@ -405,6 +409,11 @@ def _default_suggested_action(classification: MailClassification) -> SuggestedAc
     if classification == MailClassification.IGNORE:
         return SuggestedAction.NO_ACTION
     return SuggestedAction.READ_FULL
+
+
+def _require_complete_message(message: MailMessage) -> None:
+    if message.content_truncated or not message.body.strip():
+        raise ValueError("Complete mail content is required for this Agent operation.")
 
 
 def _parse_suggested_action(value: object, *, fallback: SuggestedAction) -> SuggestedAction:

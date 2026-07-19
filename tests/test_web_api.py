@@ -1,11 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Event, Lock
 
 from fastapi.testclient import TestClient
 
 from qq_mail_agent_cli.agent import MailAgent
-from qq_mail_agent_cli.mail_client import MailClient
+from qq_mail_agent_cli.mail_client import MailClient, MailReadBatch, MailReadFailure
 from qq_mail_agent_cli.models import (
     Draft,
     DraftSendResult,
@@ -48,10 +49,71 @@ class FakeMailClient:
         self.moved: list[str] = []
         self.recent_calls: list[tuple[int, int]] = []
         self.detail_calls: list[str] = []
+        self.content_calls: list[str] = []
+        self.content_failures: dict[str, MailReadFailure] = {}
 
     def list_real_recent(self, limit: int, *, offset: int = 0):
+        return list(self.list_real_recent_batch(limit, offset=offset).messages)
+
+    def list_real_recent_batch(self, limit: int, *, offset: int = 0):
         self.recent_calls.append((limit, offset))
-        return self.messages[offset : offset + limit]
+        headers = tuple(
+            replace(
+                message,
+                body="",
+                snippet="邮件正文将在打开后读取。",
+                html_body="",
+                remote_images=(),
+                inline_images=(),
+                attachments=(),
+                content_truncated=True,
+            )
+            for message in self.messages[offset : offset + limit]
+        )
+        return MailReadBatch(messages=headers)
+
+    def fetch_real_messages(self, mail_ids: list[str]):
+        self.content_calls.extend(mail_ids)
+        messages = []
+        failures = []
+        for mail_id in mail_ids:
+            normalized = mail_id if mail_id.startswith("uid:") else f"uid:{mail_id}"
+            if failure := self.content_failures.get(normalized):
+                failures.append(failure)
+                continue
+            message = next((item for item in self.messages if item.id == normalized), None)
+            if message is None:
+                failures.append(
+                    MailReadFailure(
+                        mail_id=normalized,
+                        stage="content",
+                        code="content_unavailable",
+                        error="邮件正文读取失败，请稍后重试或人工查看。",
+                    )
+                )
+                continue
+            if message.content_truncated:
+                failures.append(
+                    MailReadFailure(
+                        mail_id=normalized,
+                        stage="content",
+                        code="content_too_large",
+                        error="邮件体积超过自动分析上限，请人工查看。",
+                    )
+                )
+                continue
+            if not message.body.strip():
+                failures.append(
+                    MailReadFailure(
+                        mail_id=normalized,
+                        stage="content",
+                        code="content_empty",
+                        error="邮件正文为空或无法解析，请人工查看。",
+                    )
+                )
+                continue
+            messages.append(message)
+        return MailReadBatch(messages=tuple(messages), failures=tuple(failures))
 
     def get_real_message(self, mail_id: str):
         self.detail_calls.append(mail_id)
@@ -82,12 +144,14 @@ class RecordingMailAgent(MailAgent):
         self.results = results or {}
         self.failures = failures or {}
         self.triage_calls: list[str] = []
+        self.triage_messages: list[MailMessage] = []
         self.draft_calls: list[str] = []
         self.translation_calls: list[str] = []
         self.summary_calls: list[str] = []
 
     def triage(self, message: MailMessage) -> TriageResult:
         self.triage_calls.append(message.id)
+        self.triage_messages.append(message)
         if message.id in self.failures:
             raise self.failures[message.id]
         return self.results.get(message.id) or super().triage(message)
@@ -208,7 +272,7 @@ def test_web_message_detail_includes_body(tmp_path):
 
 def test_web_generates_summary_on_demand_for_normal_mail(tmp_path):
     agent = RecordingMailAgent()
-    client, _, store = _client(tmp_path, agent=agent)
+    client, fake_client, store = _client(tmp_path, agent=agent)
 
     response = client.post("/api/messages/101/summary", json={"confirmed": False})
 
@@ -227,6 +291,8 @@ def test_web_generates_summary_on_demand_for_normal_mail(tmp_path):
     stored = store.get_mail_insight("uid:101")
     assert stored is not None
     assert stored.summary_zh == "Interview question 按需摘要"
+    assert fake_client.content_calls == ["uid:101"]
+    assert fake_client.detail_calls == []
     assert store.get_triage_result("uid:101") is None
     assert client.get("/api/triage/queue?statuses=pending").json() == []
     assert client.get("/api/search/messages?queue_status=pending").json() == []
@@ -287,6 +353,79 @@ def test_web_summary_allows_sensitive_title_after_confirmation(tmp_path):
     assert store.get_triage_result("uid:101") is None
 
 
+def test_web_summary_requires_confirmation_for_sensitive_body_with_normal_title(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = MailMessage(
+        id="uid:101",
+        sender="service@example.com",
+        recipient="me@qq.com",
+        subject="资料更新",
+        body="请核对身份证和银行卡信息。",
+        snippet="资料更新",
+        is_seen=False,
+    )
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    blocked = client.post("/api/messages/101/summary", json={"confirmed": False})
+
+    assert blocked.status_code == 409
+    assert "敏感或隐私内容" in blocked.json()["detail"]
+    assert agent.summary_calls == []
+    assert store.get_mail_insight("uid:101") is None
+
+    confirmed = client.post("/api/messages/101/summary", json={"confirmed": True})
+
+    assert confirmed.status_code == 200
+    payload = confirmed.json()
+    assert payload["analysis_error"] == "privacy_private"
+    assert payload["ai_audit"]["privacy_level"] == "private"
+    assert payload["ai_audit"]["body_policy"]["status"] == "confirmed_once"
+    assert agent.summary_calls == ["uid:101"]
+
+
+def test_web_ai_body_operations_reject_unreadable_content_before_agent(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = replace(
+        fake_client.messages[0],
+        body="",
+        content_truncated=False,
+    )
+    agent = RecordingMailAgent()
+    client, _, _ = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    summary = client.post("/api/messages/101/summary", json={"confirmed": True})
+    translation = client.post("/api/messages/101/translate", json={"confirmed": True})
+    draft = client.post("/api/messages/101/draft", json={"confirmed": True})
+
+    assert [summary.status_code, translation.status_code, draft.status_code] == [409, 409, 409]
+    assert all("人工查看" in response.json()["detail"] for response in (summary, translation, draft))
+    assert agent.summary_calls == []
+    assert agent.translation_calls == []
+    assert agent.draft_calls == []
+    assert fake_client.detail_calls == []
+    assert fake_client.content_calls == ["uid:101", "uid:101", "uid:101"]
+
+
+def test_web_ai_body_operations_reject_oversized_content_before_agent(tmp_path):
+    fake_client = FakeMailClient()
+    fake_client.messages[0] = replace(
+        fake_client.messages[0],
+        body="",
+        content_truncated=True,
+    )
+    agent = RecordingMailAgent()
+    client, _, _ = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/messages/101/summary", json={"confirmed": True})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "邮件体积超过自动分析上限，请人工查看。"
+    assert agent.summary_calls == []
+    assert fake_client.detail_calls == []
+    assert fake_client.content_calls == ["uid:101"]
+
+
 def test_web_summary_preserves_existing_queue_status(tmp_path):
     agent = RecordingMailAgent()
     client, _, store = _client(tmp_path, agent=agent)
@@ -324,7 +463,8 @@ def test_web_risky_actions_require_confirmation(tmp_path):
 
 
 def test_web_triage_recent_skips_seen_and_saves_results(tmp_path):
-    client, _, store = _client(tmp_path)
+    agent = RecordingMailAgent()
+    client, fake_client, store = _client(tmp_path, agent=agent)
 
     response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 2})
 
@@ -332,6 +472,10 @@ def test_web_triage_recent_skips_seen_and_saves_results(tmp_path):
     payload = response.json()
     assert payload["skipped_seen"] == 1
     assert payload["processed"][0]["classification"] == "respond"
+    assert payload["failures"] == []
+    assert fake_client.content_calls == ["uid:101"]
+    assert agent.triage_messages[0].body == "Can you reply with your available time?"
+    assert agent.triage_messages[0].content_truncated is False
     assert store.get_triage_result("uid:101") is not None
 
 
@@ -367,6 +511,100 @@ def test_web_triage_recent_blocks_sensitive_mail_before_ai(tmp_path):
     assert audit["body_summary"]["status"] == "not_generated"
     assert audit["body_summary"]["sent_to_ai"] is False
     assert audit["body_policy"]["status"] == "confirmation_required"
+
+
+def test_web_triage_recent_reports_content_failure_and_continues(tmp_path):
+    fake_client = FakeMailClient()
+    failed = MailMessage(
+        id="uid:210",
+        sender="failed@example.com",
+        recipient="me@qq.com",
+        subject="Failed detail",
+        body="This body must not reach the Agent.",
+        is_seen=False,
+    )
+    successful = MailMessage(
+        id="uid:211",
+        sender="success@example.com",
+        recipient="me@qq.com",
+        subject="Please reply",
+        body="Please reply before Friday.",
+        is_seen=False,
+    )
+    fake_client.messages = [failed, successful]
+    fake_client.content_failures[failed.id] = MailReadFailure(
+        mail_id=failed.id,
+        stage="content",
+        code="content_unavailable",
+        error="邮件正文读取失败，请稍后重试或人工查看。",
+    )
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["uid"] for item in payload["processed"]] == [successful.id]
+    assert payload["failures"] == [
+        {
+            "uid": failed.id,
+            "subject": failed.subject,
+            "error": "MailReadFailed: 邮件正文读取失败，请稍后重试或人工查看。",
+        }
+    ]
+    assert agent.triage_calls == [successful.id]
+    failed_insight = store.get_mail_insight(failed.id)
+    assert failed_insight is not None
+    assert failed_insight.analysis_status == "review_required"
+    assert failed_insight.analysis_error == "mail_content_unavailable"
+
+
+def test_web_triage_recent_reports_empty_body_without_calling_agent(tmp_path):
+    fake_client = FakeMailClient()
+    empty = MailMessage(
+        id="uid:212",
+        sender="empty@example.com",
+        recipient="me@qq.com",
+        subject="Attachment only",
+        body="",
+        is_seen=False,
+    )
+    fake_client.messages = [empty]
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["processed"] == []
+    assert payload["failures"] == [
+        {
+            "uid": empty.id,
+            "subject": empty.subject,
+            "error": "MailReadFailed: 邮件正文为空或无法解析，请人工查看。",
+        }
+    ]
+    assert agent.triage_calls == []
+    insight = store.get_mail_insight(empty.id)
+    assert insight is not None
+    assert insight.analysis_error == "mail_content_empty"
+
+
+def test_web_triage_recent_hides_top_level_content_fetch_error(tmp_path):
+    class FailingContentClient(FakeMailClient):
+        def fetch_real_messages(self, mail_ids: list[str]):
+            raise RuntimeError("Customer secret body api-key=secret")
+
+    client, _, _ = _client(tmp_path, mail_client=FailingContentClient())
+
+    response = client.post("/api/triage/recent", json={"confirmed": True, "limit": 2})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "批量分类暂时无法读取邮件正文，请稍后重试"
+    assert "Customer secret" not in response.text
+    assert "api-key" not in response.text
 
 
 def test_web_triage_queue_can_include_history_statuses(tmp_path):
@@ -782,11 +1020,11 @@ def test_web_secretary_inspection_hides_top_level_mail_error(tmp_path):
             super().__init__()
             self.fail_next_request = True
 
-        def list_real_recent(self, limit: int, *, offset: int = 0):
+        def list_real_recent_batch(self, limit: int, *, offset: int = 0):
             if self.fail_next_request:
                 self.fail_next_request = False
                 raise RuntimeError("IMAP failed while handling Customer secret body api-key=secret")
-            return super().list_real_recent(limit, offset=offset)
+            return super().list_real_recent_batch(limit, offset=offset)
 
     client, _, _ = _client(tmp_path, mail_client=FailingMailClient())
 
@@ -894,7 +1132,10 @@ def test_web_secretary_inspection_filters_and_deduplicates_current_queue(tmp_pat
     assert response.status_code == 200
     payload = response.json()
     assert fake_client.recent_calls == [(4, 0)]
+    assert fake_client.content_calls == ["uid:201"]
     assert agent.triage_calls == ["uid:201"]
+    assert agent.triage_messages[0].body == "Please reply today."
+    assert agent.triage_messages[0].content_truncated is False
     assert payload["scanned_count"] == 4
     assert payload["processed_count"] == 1
     assert payload["skipped_seen"] == 1
@@ -906,6 +1147,57 @@ def test_web_secretary_inspection_filters_and_deduplicates_current_queue(tmp_pat
     existing_item = next(item for item in items if item["uid"] == "uid:203")
     assert existing_item["reason"] == "Existing local result."
     assert existing_item["queue_status"] == "later"
+
+
+def test_web_secretary_inspection_reports_content_failure_and_continues(tmp_path):
+    fake_client = FakeMailClient()
+    failed = MailMessage(
+        id="uid:220",
+        sender="failed@example.com",
+        recipient="me@qq.com",
+        subject="Unreadable body",
+        body="This content should not reach the Agent.",
+        is_seen=False,
+    )
+    successful = MailMessage(
+        id="uid:221",
+        sender="success@example.com",
+        recipient="me@qq.com",
+        subject="Please reply",
+        body="Please reply with a time.",
+        is_seen=False,
+    )
+    fake_client.messages = [failed, successful]
+    fake_client.content_failures[failed.id] = MailReadFailure(
+        mail_id=failed.id,
+        stage="content",
+        code="content_unavailable",
+        error="邮件正文读取失败，请稍后重试或人工查看。",
+    )
+    agent = RecordingMailAgent()
+    client, _, store = _client(tmp_path, mail_client=fake_client, agent=agent)
+
+    response = client.post(
+        "/api/secretary/inspection",
+        json={"confirmed": True, "limit": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["processed_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["failures"] == [
+        {
+            "uid": failed.id,
+            "subject": failed.subject,
+            "error": "MailReadFailed: 邮件正文读取失败，请稍后重试或人工查看。",
+        }
+    ]
+    assert agent.triage_calls == [successful.id]
+    failed_insight = store.get_mail_insight(failed.id)
+    assert failed_insight is not None
+    assert failed_insight.analysis_status == "review_required"
+    assert failed_insight.analysis_error == "mail_content_unavailable"
 
 
 def test_web_secretary_inspection_continues_after_single_mail_failure(tmp_path):
@@ -960,6 +1252,7 @@ def test_web_secretary_inspection_has_no_mailbox_or_draft_side_effects(tmp_path)
     assert response.status_code == 200
     assert fake_client.recent_calls == [(20, 0)]
     assert fake_client.detail_calls == []
+    assert fake_client.content_calls == ["uid:101"]
     assert fake_client.marked_seen == []
     assert fake_client.moved == []
     assert fake_client.sent == []

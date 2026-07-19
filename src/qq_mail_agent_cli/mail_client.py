@@ -25,6 +25,20 @@ class IncrementalMailBatch:
     failed_uids: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class MailReadFailure:
+    mail_id: str
+    stage: str
+    code: str
+    error: str
+
+
+@dataclass(frozen=True)
+class MailReadBatch:
+    messages: tuple[MailMessage, ...]
+    failures: tuple[MailReadFailure, ...] = ()
+
+
 class MailClient:
     """Mail protocol boundary for mock data, IMAP, and SMTP."""
 
@@ -58,17 +72,26 @@ class MailClient:
         return messages[:limit]
 
     def list_real_recent(self, limit: int, *, offset: int = 0) -> list[MailMessage]:
+        return list(self.list_real_recent_batch(limit, offset=offset).messages)
+
+    def list_real_recent_batch(self, limit: int, *, offset: int = 0) -> MailReadBatch:
         self._require_mail_credentials()
         with self._connect_imap() as imap:
-            imap.select("INBOX", readonly=True)
+            status, _ = imap.select("INBOX", readonly=True)
+            if status != "OK":
+                raise RuntimeError("Unable to select mailbox: INBOX")
             status, data = imap.uid("search", None, "ALL")
-            if status != "OK" or not data or not data[0]:
-                return []
+            if status != "OK":
+                raise RuntimeError("IMAP recent message search failed.")
+            if not data or not data[0]:
+                return MailReadBatch(messages=())
             uids = data[0].split()
             newest_first = list(reversed(uids))
             selected_uids = newest_first[offset : offset + limit]
-            messages = []
+            messages: list[MailMessage] = []
+            failures: list[MailReadFailure] = []
             for uid in selected_uids:
+                mail_id = f"uid:{uid.decode('ascii', errors='replace')}"
                 try:
                     message = self._fetch_uid_header(imap, uid)
                 except (imaplib.IMAP4.error, OSError, TimeoutError, ConnectionError):
@@ -77,7 +100,112 @@ class MailClient:
                     message = None
                 if message is not None:
                     messages.append(message)
-            return messages
+                else:
+                    failures.append(
+                        MailReadFailure(
+                            mail_id=mail_id,
+                            stage="header",
+                            code="header_unavailable",
+                            error="邮件标题读取失败，请稍后重试或人工查看。",
+                        )
+                    )
+            return MailReadBatch(messages=tuple(messages), failures=tuple(failures))
+
+    def fetch_real_messages(self, mail_ids: list[str]) -> MailReadBatch:
+        """Fetch complete messages for AI processing with a bounded MIME size."""
+        requested: list[tuple[int, str, bytes]] = []
+        ordered_failures: list[tuple[int, MailReadFailure]] = []
+        seen: set[str] = set()
+        for index, mail_id in enumerate(mail_ids):
+            uid = _normalize_uid(mail_id)
+            if uid is None:
+                ordered_failures.append(
+                    (
+                        index,
+                        MailReadFailure(
+                            mail_id=mail_id,
+                            stage="content",
+                            code="invalid_uid",
+                            error="邮件 UID 无效，无法读取正文。",
+                        ),
+                    )
+                )
+                continue
+            canonical_id = f"uid:{uid}"
+            if canonical_id in seen:
+                continue
+            seen.add(canonical_id)
+            requested.append((index, canonical_id, uid.encode("ascii")))
+
+        if not requested:
+            return MailReadBatch(
+                messages=(),
+                failures=tuple(
+                    failure
+                    for _, failure in sorted(ordered_failures, key=lambda item: item[0])
+                ),
+            )
+
+        self._require_mail_credentials()
+        messages: list[MailMessage] = []
+        with self._connect_imap() as imap:
+            status, _ = imap.select("INBOX", readonly=True)
+            if status != "OK":
+                raise RuntimeError("Unable to select mailbox: INBOX")
+            for index, canonical_id, uid in requested:
+                try:
+                    message = self._fetch_incremental_uid(imap, uid)
+                except (imaplib.IMAP4.error, OSError, TimeoutError, ConnectionError):
+                    message = None
+                except Exception:
+                    message = None
+                if message is None:
+                    ordered_failures.append(
+                        (
+                            index,
+                            MailReadFailure(
+                                mail_id=canonical_id,
+                                stage="content",
+                                code="content_unavailable",
+                                error="邮件正文读取失败，请稍后重试或人工查看。",
+                            ),
+                        )
+                    )
+                    continue
+                if message.content_truncated:
+                    ordered_failures.append(
+                        (
+                            index,
+                            MailReadFailure(
+                                mail_id=canonical_id,
+                                stage="content",
+                                code="content_too_large",
+                                error="邮件体积超过自动分析上限，请人工查看。",
+                            ),
+                        )
+                    )
+                    continue
+                if not message.body.strip():
+                    ordered_failures.append(
+                        (
+                            index,
+                            MailReadFailure(
+                                mail_id=canonical_id,
+                                stage="content",
+                                code="content_empty",
+                                error="邮件正文为空或无法解析，请人工查看。",
+                            ),
+                        )
+                    )
+                    continue
+                messages.append(message)
+        return MailReadBatch(
+            messages=tuple(messages),
+            failures=tuple(
+                failure
+                for _, failure in sorted(ordered_failures, key=lambda item: item[0])
+            ),
+        )
 
     def fetch_incremental(
         self,

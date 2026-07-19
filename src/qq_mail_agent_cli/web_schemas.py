@@ -173,10 +173,17 @@ class StatusResponse(BaseModel):
     detail: str
 
 
+class TriageRecentFailureResponse(BaseModel):
+    uid: str
+    subject: str
+    error: str
+
+
 class TriageRecentResponse(BaseModel):
     processed: list[TriageResponse]
     skipped_seen: int = 0
     skipped_triaged: int = 0
+    failures: list[TriageRecentFailureResponse] = Field(default_factory=list)
 
 
 class SearchMailResponse(BaseModel):

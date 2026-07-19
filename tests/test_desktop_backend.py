@@ -606,7 +606,8 @@ def test_mail_client_recent_list_fetches_headers_only_and_skips_failed_uids(monk
         lambda *args: (_ for _ in ()).throw(AssertionError("recent list must not fetch full MIME")),
     )
 
-    messages = client.list_real_recent(2)
+    batch = client.list_real_recent_batch(2)
+    messages = list(batch.messages)
 
     assert [message.id for message in messages] == ["uid:2"]
     assert messages[0].subject == "Header only"
@@ -614,6 +615,9 @@ def test_mail_client_recent_list_fetches_headers_only_and_skips_failed_uids(monk
     assert messages[0].snippet == "邮件正文将在打开后读取。"
     assert messages[0].is_seen is True
     assert messages[0].size_bytes == 2048
+    assert [(failure.mail_id, failure.code) for failure in batch.failures] == [
+        ("uid:1", "header_unavailable")
+    ]
     assert fake_imap.fetch_queries == [
         (b"2", "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])"),
         (b"1", "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])"),
@@ -657,6 +661,83 @@ def test_incremental_fetch_uses_header_only_for_oversized_message(monkeypatch):
     assert message.content_truncated is True
     assert message.size_bytes == 9000
     assert message.body == ""
+
+
+def test_mail_client_fetch_real_messages_returns_complete_content_and_ordered_failures(monkeypatch):
+    class DetailBatchImap:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def select(self, mailbox, readonly=True):
+            assert mailbox == "INBOX"
+            assert readonly is True
+            return "OK", [b"3"]
+
+    client = MailClient(
+        MailConfig("you@qq.com", "imap.qq.com", 993, "smtp.qq.com", 465, "secret")
+    )
+    monkeypatch.setattr(client, "_connect_imap", DetailBatchImap)
+
+    def fetch_uid(_imap, uid):
+        if uid == b"1":
+            return MailMessage(
+                id="uid:1",
+                sender="sender@example.com",
+                recipient="you@qq.com",
+                subject="Complete",
+                body="Complete body",
+            )
+        if uid == b"2":
+            return MailMessage(
+                id="uid:2",
+                sender="large@example.com",
+                recipient="you@qq.com",
+                subject="Too large",
+                body="",
+                content_truncated=True,
+            )
+        if uid == b"4":
+            return MailMessage(
+                id="uid:4",
+                sender="empty@example.com",
+                recipient="you@qq.com",
+                subject="No readable body",
+                body="  ",
+            )
+        return None
+
+    monkeypatch.setattr(client, "_fetch_incremental_uid", fetch_uid)
+
+    batch = client.fetch_real_messages(["uid:1", "uid:2", "uid:3", "uid:4", "invalid"])
+
+    assert [message.id for message in batch.messages] == ["uid:1"]
+    assert batch.messages[0].body == "Complete body"
+    assert [(failure.mail_id, failure.code) for failure in batch.failures] == [
+        ("uid:2", "content_too_large"),
+        ("uid:3", "content_unavailable"),
+        ("uid:4", "content_empty"),
+        ("invalid", "invalid_uid"),
+    ]
+
+
+def test_agent_rejects_header_only_mail_for_body_operations():
+    header_only = replace(_message(1), body="", content_truncated=True)
+
+    with pytest.raises(ValueError, match="Complete mail content"):
+        MailAgent().triage(header_only)
+    with pytest.raises(ValueError, match="Complete mail content"):
+        MailAgent().summarize_message(header_only)
+    with pytest.raises(ValueError, match="Complete mail content"):
+        MailAgent().draft_reply(header_only)
+    with pytest.raises(ValueError, match="Complete mail content"):
+        MailAgent().translate_message(header_only)
+
+    empty_complete_message = replace(_message(1), body="  ", content_truncated=False)
+    with pytest.raises(ValueError, match="Complete mail content"):
+        MailAgent().triage(empty_complete_message)
 
 
 class FakeIncrementalClient:

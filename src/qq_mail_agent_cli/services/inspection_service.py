@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from qq_mail_agent_cli.agent import MailAgent
-from qq_mail_agent_cli.mail_client import MailClient
+from qq_mail_agent_cli.mail_client import MailClient, MailReadFailure
 from qq_mail_agent_cli.models import MailMessage, TriageResult
 from qq_mail_agent_cli.privacy import PrivacyConfig, privacy_review_summary, should_block_ai
 from qq_mail_agent_cli.storage import StateStore, StoredTriage, analysis_error_from_privacy_level, apply_user_label_rule
@@ -80,11 +80,15 @@ class SecretaryInspectionService:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
 
-        messages = self._client.list_real_recent(limit, offset=0)
-        scanned_count = len(messages)
+        header_batch = self._client.list_real_recent_batch(limit, offset=0)
+        messages = list(header_batch.messages)
+        scanned_count = len(messages) + len(header_batch.failures)
         skipped_seen = 0
         skipped_triaged = 0
-        failures: list[SecretaryInspectionFailure] = []
+        failures = [
+            _inspection_read_failure(failure, subject="")
+            for failure in header_batch.failures
+        ]
         processed_items: dict[str, SecretaryInspectionItem] = {}
 
         unread_messages: list[MailMessage] = []
@@ -97,23 +101,55 @@ class SecretaryInspectionService:
 
         triaged_uids = self._store.get_triaged_uids([message.id for message in unread_messages])
         handled_uids: set[str] = set()
-        for message in unread_messages:
-            if message.id in triaged_uids or message.id in handled_uids:
+        content_candidates: list[MailMessage] = []
+        for header in unread_messages:
+            if header.id in triaged_uids or header.id in handled_uids:
                 skipped_triaged += 1
-                self._store.upsert_mail(message)
+                self._store.upsert_mail(header)
                 continue
 
-            handled_uids.add(message.id)
-            rule = self._store.match_user_label_rule(message)
+            handled_uids.add(header.id)
+            rule = self._store.match_user_label_rule(header)
             if rule is not None:
-                result = apply_user_label_rule(MailAgent().classify_title(message), rule)
+                result = apply_user_label_rule(MailAgent().classify_title(header), rule)
                 self._store.save_triage(
-                    message,
+                    header,
                     result,
                     model="user-label-rule",
                     analysis_error=analysis_error_from_privacy_level(rule.privacy_level),
                 )
-                processed_items[message.id] = _item_from_result(message, result)
+                processed_items[header.id] = _item_from_result(header, result)
+                continue
+            content_candidates.append(header)
+
+        content_batch = self._client.fetch_real_messages(
+            [message.id for message in content_candidates]
+        )
+        messages_by_id = {message.id: message for message in content_batch.messages}
+        failures_by_id = {failure.mail_id: failure for failure in content_batch.failures}
+        for header in content_candidates:
+            content_failure = failures_by_id.get(header.id)
+            message = messages_by_id.get(header.id)
+            if content_failure is not None or message is None:
+                content_failure = content_failure or MailReadFailure(
+                    mail_id=header.id,
+                    stage="content",
+                    code="content_unavailable",
+                    error="邮件正文读取失败，请稍后重试或人工查看。",
+                )
+                self._store.record_analysis_review_required(
+                    header,
+                    uid_validity=0,
+                    summary_zh=content_failure.error,
+                    reason="未把不完整邮件发送给 DeepSeek。",
+                    error_code=f"mail_{content_failure.code}",
+                )
+                failures.append(
+                    _inspection_read_failure(
+                        content_failure,
+                        subject=header.subject,
+                    )
+                )
                 continue
             privacy_verdict = should_block_ai(message, self._privacy_config)
             if privacy_verdict.sensitive:
@@ -243,3 +279,15 @@ def _group_key(item: SecretaryInspectionItem) -> str:
 def _safe_error_summary(error: Exception) -> str:
     # Model/provider exceptions may echo message content or request payloads.
     return f"{error.__class__.__name__}: 本封邮件分析失败，请稍后重试"
+
+
+def _inspection_read_failure(
+    failure: MailReadFailure,
+    *,
+    subject: str,
+) -> SecretaryInspectionFailure:
+    return SecretaryInspectionFailure(
+        uid=failure.mail_id,
+        subject=subject,
+        error=f"MailReadFailed: {failure.error}",
+    )

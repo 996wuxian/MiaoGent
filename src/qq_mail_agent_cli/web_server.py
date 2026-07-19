@@ -30,10 +30,11 @@ from qq_mail_agent_cli.health import (
     run_local_health_checks,
 )
 from qq_mail_agent_cli.llm_client import DeepSeekClient
-from qq_mail_agent_cli.mail_client import MailClient
+from qq_mail_agent_cli.mail_client import MailClient, MailReadFailure
+from qq_mail_agent_cli.models import MailMessage
 from qq_mail_agent_cli.privacy import (
     PrivacyConfig,
-    classify_mail_title_privacy,
+    classify_mail_privacy,
     privacy_error_code,
     privacy_review_summary,
     should_block_ai,
@@ -73,6 +74,7 @@ from qq_mail_agent_cli.web_schemas import (
     StartupSummaryResponse,
     SyncStateResponse,
     TranslationResponse,
+    TriageRecentFailureResponse,
     TriageRecentRequest,
     TriageRecentResponse,
     TriageResponse,
@@ -271,9 +273,17 @@ def create_app(
     ):
         _require_confirmation(request)
         try:
-            messages = client.list_real_recent(request.limit, offset=request.offset)
+            header_batch = client.list_real_recent_batch(request.limit, offset=request.offset)
         except RuntimeError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(
+                status_code=502,
+                detail="批量分类暂时无法读取邮箱，请稍后重试",
+            ) from error
+        messages = list(header_batch.messages)
+        failures = [
+            _triage_failure_response(failure, subject="")
+            for failure in header_batch.failures
+        ]
         skipped_seen = 0
         if request.unread_only:
             kept = []
@@ -300,24 +310,88 @@ def create_app(
         processed = []
         model_name = app.state.deepseek_config_factory().model
         privacy_config = app.state.privacy_config_factory()
-        for message in messages:
-            rule = store.match_user_label_rule(message)
+        content_candidates: list[MailMessage] = []
+        for header in messages:
+            rule = store.match_user_label_rule(header)
             if rule is not None:
-                result = apply_user_label_rule(MailAgent().classify_title(message), rule)
+                result = apply_user_label_rule(MailAgent().classify_title(header), rule)
                 store.save_triage(
-                    message,
+                    header,
                     result,
                     model="user-label-rule",
                     analysis_error=analysis_error_from_privacy_level(rule.privacy_level),
                 )
-                processed.append(triage_to_response(result, message=message))
+                processed.append(triage_to_response(result, message=header))
+                continue
+            content_candidates.append(header)
+
+        try:
+            content_batch = client.fetch_real_messages(
+                [message.id for message in content_candidates]
+            )
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="批量分类暂时无法读取邮件正文，请稍后重试",
+            ) from error
+        messages_by_id = {message.id: message for message in content_batch.messages}
+        failures_by_id = {failure.mail_id: failure for failure in content_batch.failures}
+        for header in content_candidates:
+            content_failure = failures_by_id.get(header.id)
+            message = messages_by_id.get(header.id)
+            if content_failure is not None or message is None:
+                content_failure = content_failure or MailReadFailure(
+                    mail_id=header.id,
+                    stage="content",
+                    code="content_unavailable",
+                    error="邮件正文读取失败，请稍后重试或人工查看。",
+                )
+                store.record_analysis_review_required(
+                    header,
+                    uid_validity=0,
+                    summary_zh=content_failure.error,
+                    reason="未把不完整邮件发送给 DeepSeek。",
+                    error_code=f"mail_{content_failure.code}",
+                )
+                failures.append(
+                    _triage_failure_response(
+                        content_failure,
+                        subject=header.subject,
+                    )
+                )
                 continue
             if _record_privacy_review_if_blocked(store, message, privacy_config):
+                failures.append(
+                    TriageRecentFailureResponse(
+                        uid=message.id,
+                        subject=message.subject,
+                        error="PrivacyProtected: 隐私保护模式已阻止本封邮件发送给 DeepSeek",
+                    )
+                )
                 continue
-            result = agent.triage(message)
-            store.save_triage(message, result, model=model_name)
-            processed.append(triage_to_response(result, message=message))
-        return TriageRecentResponse(processed=processed, skipped_seen=skipped_seen, skipped_triaged=skipped_triaged)
+            try:
+                result = agent.triage(message)
+                store.save_triage(message, result, model=model_name)
+                processed.append(triage_to_response(result, message=message))
+            except Exception as error:
+                store.record_analysis_failure(
+                    message,
+                    uid_validity=0,
+                    error=error,
+                )
+                failures.append(
+                    TriageRecentFailureResponse(
+                        uid=message.id,
+                        subject=message.subject,
+                        error=f"{error.__class__.__name__}: 本封邮件分析失败，请稍后重试",
+                    )
+                )
+        return TriageRecentResponse(
+            processed=processed,
+            skipped_seen=skipped_seen,
+            skipped_triaged=skipped_triaged,
+            failures=failures,
+        )
 
     @app.post("/api/secretary/inspection", response_model=SecretaryInspectionResponse)
     def secretary_inspection(
@@ -618,7 +692,7 @@ def create_app(
         store: Annotated[StateStore, Depends(_get_state_store)],
     ):
         _require_confirmation(request)
-        message = _get_message_or_404(client, uid)
+        message = _get_complete_message_for_ai(client, uid)
         _raise_if_privacy_blocked(message, app.state.privacy_config_factory())
         translation = agent.translate_message(message)
         store.upsert_mail(message)
@@ -633,12 +707,12 @@ def create_app(
         agent: Annotated[MailAgent, Depends(_get_agent)],
         store: Annotated[StateStore, Depends(_get_state_store)],
     ):
-        message = _get_message_or_404(client, uid)
-        verdict = classify_mail_title_privacy(message.subject, app.state.privacy_config_factory())
+        message = _get_complete_message_for_ai(client, uid)
+        verdict = classify_mail_privacy(message, app.state.privacy_config_factory())
         if verdict.sensitive and not request.confirmed:
             raise HTTPException(
                 status_code=409,
-                detail="该邮件标题疑似敏感或隐私。生成摘要会把正文发送给 AI，请二次确认。",
+                detail="该邮件疑似包含敏感或隐私内容。生成摘要会把正文发送给 AI，请二次确认。",
             )
         insight = store.get_mail_insight(_normalize_uid_for_store(uid))
         mailbox = insight.mailbox if insight is not None else "INBOX"
@@ -683,7 +757,7 @@ def create_app(
         store: Annotated[StateStore, Depends(_get_state_store)],
     ):
         _require_confirmation(request)
-        message = _get_message_or_404(client, uid)
+        message = _get_complete_message_for_ai(client, uid)
         _raise_if_privacy_blocked(message, app.state.privacy_config_factory())
         draft = agent.draft_reply(message)
         store.upsert_mail(message)
@@ -795,6 +869,28 @@ def _get_message_or_404(client: MailClient, uid: str):
     return message
 
 
+def _get_complete_message_for_ai(client: MailClient, uid: str) -> MailMessage:
+    normalized_uid = _normalize_uid_for_store(uid)
+    try:
+        batch = client.fetch_real_messages([normalized_uid])
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="邮件正文暂时无法读取，请稍后重试",
+        ) from error
+    message = next((item for item in batch.messages if item.id == normalized_uid), None)
+    if message is not None:
+        return message
+    failure = batch.failures[0] if batch.failures else None
+    if failure is not None and failure.code == "invalid_uid":
+        raise HTTPException(status_code=404, detail="邮件不存在或 UID 无效")
+    if failure is not None and failure.code == "content_too_large":
+        raise HTTPException(status_code=409, detail="邮件体积超过自动分析上限，请人工查看。")
+    if failure is not None and failure.code == "content_empty":
+        raise HTTPException(status_code=409, detail="邮件没有可供 AI 处理的文本正文，请人工查看。")
+    raise HTTPException(status_code=502, detail="邮件正文暂时无法读取，请稍后重试")
+
+
 def _record_privacy_review_if_blocked(
     store: StateStore,
     message,
@@ -833,6 +929,18 @@ def _normalize_uid_for_store(uid: str) -> str:
     if value.startswith("uid:"):
         return value
     return f"uid:{value}"
+
+
+def _triage_failure_response(
+    failure: MailReadFailure,
+    *,
+    subject: str,
+) -> TriageRecentFailureResponse:
+    return TriageRecentFailureResponse(
+        uid=failure.mail_id,
+        subject=subject,
+        error=f"MailReadFailed: {failure.error}",
+    )
 
 
 def main() -> None:

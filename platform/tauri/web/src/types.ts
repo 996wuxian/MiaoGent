@@ -91,6 +91,11 @@ export type TriageRecentResult = {
   processed: TriageItem[];
   skipped_seen: number;
   skipped_triaged: number;
+  failures: Array<{
+    uid: string;
+    subject: string;
+    error: string;
+  }>;
 };
 
 export type InspectionGroupKey = 'reply' | 'review' | 'status' | 'no_action';
